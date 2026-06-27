@@ -1,0 +1,45 @@
+name: Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: 'Symbol to backtest'
+        required: true
+        type: choice
+        options:
+          - XAUUSD
+          - EURUSD
+          - GBPUSD
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Run backtest
+        run: node core/runner.js backtest ${{ github.event.inputs.symbol }}
+        env:
+          CAPITAL_API_KEY: ${{ secrets.CAPITAL_API_KEY }}
+          CAPITAL_IDENTIFIER: ${{ secrets.CAPITAL_IDENTIFIER }}
+          CAPITAL_PASSWORD: ${{ secrets.CAPITAL_PASSWORD }}
+          CAPITAL_DEMO: ${{ vars.CAPITAL_DEMO }}
+          OANDA_API_KEY: ${{ secrets.OANDA_API_KEY }}
+          OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID }}
+          OANDA_DEMO: ${{ vars.OANDA_DEMO }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_ERROR_WEBHOOK_URL: ${{ secrets.DISCORD_ERROR_WEBHOOK_URL }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backtest-${{ github.event.inputs.symbol }}-${{ github.run_id }}
+          path: backtests/
+          retention-days: 7

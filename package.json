@@ -1,0 +1,22 @@
+{
+  "name": "trading-bot",
+  "version": "1.0.0",
+  "description": "Multi-broker trading bot with pluggable strategies",
+  "main": "core/runner.js",
+  "scripts": {
+    "start": "node core/runner.js",
+    "live": "node core/runner.js live",
+    "backtest": "node core/runner.js backtest",
+    "test": "node --test tests/",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
