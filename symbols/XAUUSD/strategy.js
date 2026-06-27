@@ -1,88 +1,101 @@
-function calculateEMA(data, period) {
+const INDICATOR_OFFSET = 50;
+
+function calcEMAFull(closes, period) {
   const k = 2 / (period + 1);
-  let ema = data[0].close;
-  for (let i = 1; i < data.length; i++) {
-    ema = data[i].close * k + ema * (1 - k);
+  const result = new Array(closes.length);
+  result[0] = closes[0];
+  for (let i = 1; i < closes.length; i++) {
+    result[i] = closes[i] * k + result[i - 1] * (1 - k);
   }
-  return ema;
+  return result;
 }
 
-function calculateRSI(data, period = 14) {
-  if (data.length < period + 1) return 50;
+function calcRSIFull(closes, period = 14) {
+  const result = new Array(closes.length).fill(50);
+  if (closes.length < period + 1) return result;
   let gains = 0, losses = 0;
   for (let i = 1; i <= period; i++) {
-    const diff = data[i].close - data[i - 1].close;
+    const diff = closes[i] - closes[i - 1];
     if (diff >= 0) gains += diff; else losses -= diff;
   }
   let avgGain = gains / period;
   let avgLoss = losses / period;
-  for (let i = period + 1; i < data.length; i++) {
-    const diff = data[i].close - data[i - 1].close;
+  result[period] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
     avgGain = (avgGain * (period - 1) + Math.max(diff, 0)) / period;
     avgLoss = (avgLoss * (period - 1) + Math.max(-diff, 0)) / period;
+    result[i] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
   }
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs));
+  return result;
 }
 
-function calculateATR(data, period = 14) {
-  if (data.length < period + 1) return 0;
+function calcATRFull(highs, lows, closes, period = 14) {
+  const result = new Array(closes.length).fill(0);
+  if (closes.length < period + 1) return result;
   let trSum = 0;
   for (let i = 1; i <= period; i++) {
-    const high = data[i].high;
-    const low = data[i].low;
-    const prevClose = data[i - 1].close;
-    trSum += Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+    trSum += Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
   }
-  return trSum / period;
+  result[period] = trSum / period;
+  for (let i = period + 1; i < closes.length; i++) {
+    const tr = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+    result[i] = (result[i - 1] * (period - 1) + tr) / period;
+  }
+  return result;
 }
 
-async function analyze(broker, config = {}) {
-  const {
-    timeframe = 'H1',
-    limit = 100,
-    emaFast = 9,
-    emaSlow = 21,
-    rsiPeriod = 14,
-    rsiOverbought = 70,
-    rsiOversold = 30,
-    atrPeriod = 14,
-    slMultiplier = 1.5,
-    tpMultiplier = 2.5,
-  } = config;
+function precalcIndicators(candles, config = {}) {
+  const closes = candles.map(c => c.close);
+  const highs = candles.map(c => c.high);
+  const lows = candles.map(c => c.low);
+  const emaFast = config.emaFast || 9;
+  const emaSlow = config.emaSlow || 21;
+  const rsiPeriod = config.rsiPeriod || 14;
+  const atrPeriod = config.atrPeriod || 14;
 
-  const candles = await broker.getCandles('XAUUSD', timeframe, limit);
-  if (!candles || candles.length < emaSlow + 5) {
-    return { signal: 'NONE', reason: 'Insufficient data' };
+  const emaFastAll = calcEMAFull(closes, emaFast);
+  const emaSlowAll = calcEMAFull(closes, emaSlow);
+  const rsiAll = calcRSIFull(closes, rsiPeriod);
+  const atrAll = calcATRFull(highs, lows, closes, atrPeriod);
+
+  const startIdx = Math.max(emaSlow, rsiPeriod, atrPeriod) + 5;
+  const result = [];
+  for (let i = startIdx; i < candles.length; i++) {
+    result.push({
+      time: candles[i].time,
+      currentPrice: closes[i],
+      emaFast: emaFastAll[i],
+      emaSlow: emaSlowAll[i],
+      prevEmaFast: emaFastAll[i - 1],
+      prevEmaSlow: emaSlowAll[i - 1],
+      rsi: rsiAll[i],
+      atr: atrAll[i],
+    });
   }
+  return result;
+}
 
-  const current = candles[candles.length - 1];
-  const prev = candles[candles.length - 2];
+function evaluate(ind, config = {}) {
+  const rsiOverbought = config.rsiOverbought || 70;
+  const rsiOversold = config.rsiOversold || 30;
+  const slMultiplier = config.slMultiplier || 1.5;
+  const tpMultiplier = config.tpMultiplier || 2.5;
 
-  const emaFastVal = calculateEMA(candles.slice(-emaFast * 2), emaFast);
-  const emaSlowVal = calculateEMA(candles.slice(-emaSlow * 2), emaSlow);
-  const rsi = calculateRSI(candles, rsiPeriod);
-  const atr = calculateATR(candles, atrPeriod);
+  const crossUp = ind.emaFast > ind.emaSlow && ind.prevEmaFast <= ind.prevEmaSlow;
+  const crossDown = ind.emaFast < ind.emaSlow && ind.prevEmaFast >= ind.prevEmaSlow;
 
-  const emaCrossUp = emaFastVal > emaSlowVal && calculateEMA(candles.slice(0, -1).slice(-emaFast * 2), emaFast) <= calculateEMA(candles.slice(0, -1).slice(-emaSlow * 2), emaSlow);
-  const emaCrossDown = emaFastVal < emaSlowVal && calculateEMA(candles.slice(0, -1).slice(-emaFast * 2), emaFast) >= calculateEMA(candles.slice(0, -1).slice(-emaSlow * 2), emaSlow);
+  let signal = 'NONE', entry = ind.currentPrice, sl = 0, tp = 0, reason = '';
 
-  let signal = 'NONE';
-  let entry = current.close;
-  let sl = 0;
-  let tp = 0;
-  let reason = '';
-
-  if (emaCrossUp && rsi < rsiOverbought) {
+  if (crossUp && ind.rsi < rsiOverbought) {
     signal = 'BUY';
-    sl = entry - atr * slMultiplier;
-    tp = entry + atr * tpMultiplier;
+    sl = entry - ind.atr * slMultiplier;
+    tp = entry + ind.atr * tpMultiplier;
     reason = 'EMA cross up + RSI not overbought';
-  } else if (emaCrossDown && rsi > rsiOversold) {
+  } else if (crossDown && ind.rsi > rsiOversold) {
     signal = 'SELL';
-    sl = entry + atr * slMultiplier;
-    tp = entry - atr * tpMultiplier;
+    sl = entry + ind.atr * slMultiplier;
+    tp = entry - ind.atr * tpMultiplier;
     reason = 'EMA cross down + RSI not oversold';
   } else {
     reason = 'No clear signal';
@@ -96,12 +109,23 @@ async function analyze(broker, config = {}) {
     tp: parseFloat(tp.toFixed(2)),
     reason,
     indicators: {
-      emaFast: parseFloat(emaFastVal.toFixed(2)),
-      emaSlow: parseFloat(emaSlowVal.toFixed(2)),
-      rsi: parseFloat(rsi.toFixed(2)),
-      atr: parseFloat(atr.toFixed(2)),
+      emaFast: parseFloat(ind.emaFast.toFixed(2)),
+      emaSlow: parseFloat(ind.emaSlow.toFixed(2)),
+      rsi: parseFloat(ind.rsi.toFixed(2)),
+      atr: parseFloat(ind.atr.toFixed(2)),
     },
   };
 }
 
-module.exports = { analyze, calculateEMA, calculateRSI, calculateATR };
+async function analyze(broker, config = {}) {
+  const timeframe = config.timeframe || 'H1';
+  const limit = config.limit || 100;
+  const candles = await broker.getCandles('XAUUSD', timeframe, limit);
+  if (!candles || candles.length < INDICATOR_OFFSET) {
+    return { signal: 'NONE', reason: 'Insufficient data' };
+  }
+  const precalc = precalcIndicators(candles, config);
+  return evaluate(precalc[precalc.length - 1], config);
+}
+
+module.exports = { analyze, precalcIndicators, evaluate, INDICATOR_OFFSET };

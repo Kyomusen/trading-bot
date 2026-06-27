@@ -1,0 +1,18 @@
+{
+  "symbol": "GBPJPY",
+  "broker": "capital",
+  "enabled": true,
+  "timeframe": "H1",
+  "lotSize": 0.1,
+  "maxPositions": 1,
+  "strategy": {
+    "emaFast": 9,
+    "emaSlow": 21,
+    "rsiPeriod": 14,
+    "rsiOverbought": 70,
+    "rsiOversold": 30,
+    "atrPeriod": 14,
+    "slMultiplier": 1.0,
+    "tpMultiplier": 5.0
+  }
+}

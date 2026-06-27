@@ -1,71 +1,94 @@
-function calculateSMA(data, period) {
-  if (data.length < period) return null;
-  const sum = data.slice(-period).reduce((a, c) => a + c.close, 0);
-  return sum / period;
+const INDICATOR_OFFSET = 50;
+
+function calcSMAFull(closes, period) {
+  const result = new Array(closes.length).fill(0);
+  if (closes.length < period) return result;
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += closes[i];
+  result[period - 1] = sum / period;
+  for (let i = period; i < closes.length; i++) {
+    sum += closes[i] - closes[i - period];
+    result[i] = sum / period;
+  }
+  return result;
 }
 
-function calculateBB(data, period = 20, stdDev = 2) {
-  const sma = calculateSMA(data, period);
-  if (!sma) return { upper: 0, middle: 0, lower: 0 };
-  const variance = data.slice(-period).reduce((sum, c) => sum + Math.pow(c.close - sma, 2), 0) / period;
-  const sd = Math.sqrt(variance);
-  return { upper: sma + sd * stdDev, middle: sma, lower: sma - sd * stdDev };
+function calcBBFull(closes, period = 20, stdDev = 2) {
+  const sma = calcSMAFull(closes, period);
+  const upper = new Array(closes.length).fill(0);
+  const lower = new Array(closes.length).fill(0);
+  for (let i = period - 1; i < closes.length; i++) {
+    let variance = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      variance += Math.pow(closes[j] - sma[i], 2);
+    }
+    variance /= period;
+    const sd = Math.sqrt(variance);
+    upper[i] = sma[i] + sd * stdDev;
+    lower[i] = sma[i] - sd * stdDev;
+  }
+  return { upper, middle: sma, lower };
 }
 
-function calculateRSI(data, period = 14) {
-  if (data.length < period + 1) return 50;
+function calcRSIFull(closes, period = 14) {
+  const result = new Array(closes.length).fill(50);
+  if (closes.length < period + 1) return result;
   let gains = 0, losses = 0;
   for (let i = 1; i <= period; i++) {
-    const diff = data[i].close - data[i - 1].close;
+    const diff = closes[i] - closes[i - 1];
     if (diff >= 0) gains += diff; else losses -= diff;
   }
   let avgGain = gains / period;
   let avgLoss = losses / period;
-  for (let i = period + 1; i < data.length; i++) {
-    const diff = data[i].close - data[i - 1].close;
+  result[period] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
     avgGain = (avgGain * (period - 1) + Math.max(diff, 0)) / period;
     avgLoss = (avgLoss * (period - 1) + Math.max(-diff, 0)) / period;
+    result[i] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
   }
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs));
+  return result;
 }
 
-async function analyze(broker, config = {}) {
-  const {
-    timeframe = 'H1',
-    limit = 100,
-    bbPeriod = 20,
-    bbStdDev = 2,
-    rsiPeriod = 14,
-    rsiOverbought = 70,
-    rsiOversold = 30,
-    slPips = 20,
-    tpPips = 40,
-  } = config;
+function precalcIndicators(candles, config = {}) {
+  const closes = candles.map(c => c.close);
+  const bbPeriod = config.bbPeriod || 20;
+  const bbStdDev = config.bbStdDev || 2;
+  const rsiPeriod = config.rsiPeriod || 14;
 
-  const candles = await broker.getCandles('EURUSD', timeframe, limit);
-  if (!candles || candles.length < bbPeriod + 5) {
-    return { signal: 'NONE', reason: 'Insufficient data' };
+  const bb = calcBBFull(closes, bbPeriod, bbStdDev);
+  const rsiAll = calcRSIFull(closes, rsiPeriod);
+
+  const startIdx = Math.max(bbPeriod, rsiPeriod) + 5;
+  const result = [];
+  for (let i = startIdx; i < candles.length; i++) {
+    result.push({
+      time: candles[i].time,
+      currentPrice: closes[i],
+      bbUpper: bb.upper[i],
+      bbLower: bb.lower[i],
+      bbMiddle: bb.middle[i],
+      rsi: rsiAll[i],
+    });
   }
+  return result;
+}
 
-  const current = candles[candles.length - 1];
-  const bb = calculateBB(candles, bbPeriod, bbStdDev);
-  const rsi = calculateRSI(candles, rsiPeriod);
-
+function evaluate(ind, config = {}) {
+  const rsiOverbought = config.rsiOverbought || 70;
+  const rsiOversold = config.rsiOversold || 30;
+  const slPips = config.slPips || 20;
+  const tpPips = config.tpPips || 40;
   const pipValue = 0.0001;
-  let signal = 'NONE';
-  let entry = current.close;
-  let sl = 0;
-  let tp = 0;
-  let reason = '';
 
-  if (current.close <= bb.lower && rsi < rsiOversold) {
+  let signal = 'NONE', entry = ind.currentPrice, sl = 0, tp = 0, reason = '';
+
+  if (ind.currentPrice <= ind.bbLower && ind.rsi < rsiOversold) {
     signal = 'BUY';
     sl = entry - slPips * pipValue;
     tp = entry + tpPips * pipValue;
     reason = 'Price at lower BB + RSI oversold';
-  } else if (current.close >= bb.upper && rsi > rsiOverbought) {
+  } else if (ind.currentPrice >= ind.bbUpper && ind.rsi > rsiOverbought) {
     signal = 'SELL';
     sl = entry + slPips * pipValue;
     tp = entry - tpPips * pipValue;
@@ -82,12 +105,23 @@ async function analyze(broker, config = {}) {
     tp: parseFloat(tp.toFixed(5)),
     reason,
     indicators: {
-      bbUpper: parseFloat(bb.upper.toFixed(5)),
-      bbMiddle: parseFloat(bb.middle.toFixed(5)),
-      bbLower: parseFloat(bb.lower.toFixed(5)),
-      rsi: parseFloat(rsi.toFixed(2)),
+      bbUpper: parseFloat(ind.bbUpper.toFixed(5)),
+      bbMiddle: parseFloat(ind.bbMiddle.toFixed(5)),
+      bbLower: parseFloat(ind.bbLower.toFixed(5)),
+      rsi: parseFloat(ind.rsi.toFixed(2)),
     },
   };
 }
 
-module.exports = { analyze, calculateSMA, calculateBB, calculateRSI };
+async function analyze(broker, config = {}) {
+  const timeframe = config.timeframe || 'H1';
+  const limit = config.limit || 100;
+  const candles = await broker.getCandles('EURUSD', timeframe, limit);
+  if (!candles || candles.length < INDICATOR_OFFSET) {
+    return { signal: 'NONE', reason: 'Insufficient data' };
+  }
+  const precalc = precalcIndicators(candles, config);
+  return evaluate(precalc[precalc.length - 1], config);
+}
+
+module.exports = { analyze, precalcIndicators, evaluate, INDICATOR_OFFSET };

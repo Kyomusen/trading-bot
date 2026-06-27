@@ -20,15 +20,41 @@ class DataStore {
 
     if (fs.existsSync(csvFile)) {
       const raw = fs.readFileSync(csvFile, 'utf8').trim().split('\n');
-      const headers = raw[0].split(',');
+      const delim = raw[0].includes(';') ? ';' : ',';
+      const headers = raw[0].split(delim).map(h => h.trim().toLowerCase());
+      const colIdx = (aliases) => {
+        for (const a of aliases) {
+          const i = headers.indexOf(a);
+          if (i >= 0) return i;
+        }
+        return -1;
+      };
+      const ci = {
+        time: colIdx(['date', 'timestamp', 'time', 'datetime', 't']),
+        open: colIdx(['open', 'o']),
+        high: colIdx(['high', 'h']),
+        low: colIdx(['low', 'l']),
+        close: colIdx(['close', 'c']),
+        volume: colIdx(['volume', 'vol', 'v']),
+      };
+      const missing = ['time', 'open', 'high', 'low', 'close'].filter(k => ci[k] < 0);
+      if (missing.length > 0) {
+        throw new Error(`CSV missing columns: ${missing.join(', ')}`);
+      }
       return raw.slice(1).map(line => {
-        const vals = line.split(',');
-        const row = {};
-        headers.forEach((h, i) => {
-          row[h.trim()] = isNaN(vals[i]) ? vals[i].trim() : parseFloat(vals[i]);
-        });
-        return row;
-      });
+        const vals = line.split(delim);
+        const timeStr = vals[ci.time].replace(/"/g, '').trim();
+        const o = parseFloat(vals[ci.open]);
+        const h = parseFloat(vals[ci.high]);
+        const l = parseFloat(vals[ci.low]);
+        const c = parseFloat(vals[ci.close]);
+        if (isNaN(o) || isNaN(h) || isNaN(l) || isNaN(c)) return null;
+        return {
+          time: timeStr.replace(/\./g, '-').replace(' ', 'T'),
+          open: o, high: h, low: l, close: c,
+          volume: ci.volume >= 0 ? (parseInt(vals[ci.volume]) || 0) : 0,
+        };
+      }).filter(Boolean);
     }
 
     return null;

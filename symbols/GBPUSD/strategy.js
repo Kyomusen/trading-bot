@@ -1,74 +1,101 @@
-function calculateEMA(data, period) {
-  const k = 2 / (period + 1);
-  let ema = data[0].close;
-  for (let i = 1; i < data.length; i++) {
-    ema = data[i].close * k + ema * (1 - k);
+const INDICATOR_OFFSET = 50;
+
+function calcSMACloses(closes) {
+  const period = 26;
+  const result = new Array(closes.length).fill(null);
+  if (closes.length < period) return result;
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += closes[i];
+  result[period - 1] = sum / period;
+  for (let i = period; i < closes.length; i++) {
+    sum += closes[i] - closes[i - period];
+    result[i] = sum / period;
   }
-  return ema;
+  return result;
 }
 
-function calculateMACD(data, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
-  const emaFast = data.map((_, i) => calculateEMA(data.slice(0, i + 1), fastPeriod));
-  const emaSlow = data.map((_, i) => calculateEMA(data.slice(0, i + 1), slowPeriod));
+function calcEMAFull(closes, period) {
+  const k = 2 / (period + 1);
+  const result = new Array(closes.length);
+  result[0] = closes[0];
+  for (let i = 1; i < closes.length; i++) {
+    result[i] = closes[i] * k + result[i - 1] * (1 - k);
+  }
+  return result;
+}
+
+function calcMACDFull(closes, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
+  const emaFast = calcEMAFull(closes, fastPeriod);
+  const emaSlow = calcEMAFull(closes, slowPeriod);
   const macdLine = emaFast.map((f, i) => f - emaSlow[i]);
-  const signalLine = macdLine.map((_, i) => calculateEMA(macdLine.slice(0, i + 1), signalPeriod));
+  const signalLine = calcEMAFull(macdLine, signalPeriod);
   const histogram = macdLine.map((m, i) => m - signalLine[i]);
-  return { macd: macdLine[macdLine.length - 1], signal: signalLine[signalLine.length - 1], histogram: histogram[histogram.length - 1] };
+  return { macd: macdLine, signal: signalLine, histogram };
 }
 
-function calculateATR(data, period = 14) {
-  if (data.length < period + 1) return 0;
+function calcATRFull(highs, lows, closes, period = 14) {
+  const result = new Array(closes.length).fill(0);
+  if (closes.length < period + 1) return result;
   let trSum = 0;
   for (let i = 1; i <= period; i++) {
-    const high = data[i].high;
-    const low = data[i].low;
-    const prevClose = data[i - 1].close;
-    trSum += Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+    trSum += Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
   }
-  return trSum / period;
+  result[period] = trSum / period;
+  for (let i = period + 1; i < closes.length; i++) {
+    const tr = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+    result[i] = (result[i - 1] * (period - 1) + tr) / period;
+  }
+  return result;
 }
 
-async function analyze(broker, config = {}) {
-  const {
-    timeframe = 'H1',
-    limit = 100,
-    macdFast = 12,
-    macdSlow = 26,
-    macdSignal = 9,
-    atrPeriod = 14,
-    slMultiplier = 1.5,
-    tpMultiplier = 2.0,
-  } = config;
+function precalcIndicators(candles, config = {}) {
+  const closes = candles.map(c => c.close);
+  const highs = candles.map(c => c.high);
+  const lows = candles.map(c => c.low);
+  const macdFast = config.macdFast || 12;
+  const macdSlow = config.macdSlow || 26;
+  const macdSignal = config.macdSignal || 9;
+  const atrPeriod = config.atrPeriod || 14;
 
-  const candles = await broker.getCandles('GBPUSD', timeframe, limit);
-  if (!candles || candles.length < macdSlow + macdSignal + 5) {
-    return { signal: 'NONE', reason: 'Insufficient data' };
+  const macd = calcMACDFull(closes, macdFast, macdSlow, macdSignal);
+  const atrAll = calcATRFull(highs, lows, closes, atrPeriod);
+
+  const startIdx = Math.max(macdSlow + macdSignal, atrPeriod) + 5;
+  const result = [];
+  for (let i = startIdx; i < candles.length; i++) {
+    result.push({
+      time: candles[i].time,
+      currentPrice: closes[i],
+      macd: macd.macd[i],
+      signal: macd.signal[i],
+      histogram: macd.histogram[i],
+      prevMacd: macd.macd[i - 1],
+      prevSignal: macd.signal[i - 1],
+      prevHistogram: macd.histogram[i - 1],
+      atr: atrAll[i],
+    });
   }
+  return result;
+}
 
-  const current = candles[candles.length - 1];
-  const macd = calculateMACD(candles, macdFast, macdSlow, macdSignal);
-  const atr = calculateATR(candles, atrPeriod);
+function evaluate(ind, config = {}) {
+  const slMultiplier = config.slMultiplier || 1.5;
+  const tpMultiplier = config.tpMultiplier || 2.0;
 
-  const prevMacd = calculateMACD(candles.slice(0, -1), macdFast, macdSlow, macdSignal);
+  const macdCrossUp = ind.macd > ind.signal && ind.prevMacd <= ind.prevSignal;
+  const macdCrossDown = ind.macd < ind.signal && ind.prevMacd >= ind.prevSignal;
 
-  let signal = 'NONE';
-  let entry = current.close;
-  let sl = 0;
-  let tp = 0;
-  let reason = '';
+  let signal = 'NONE', entry = ind.currentPrice, sl = 0, tp = 0, reason = '';
 
-  const macdCrossUp = macd.macd > macd.signal && prevMacd.macd <= prevMacd.signal;
-  const macdCrossDown = macd.macd < macd.signal && prevMacd.macd >= prevMacd.signal;
-
-  if (macdCrossUp && macd.histogram > 0) {
+  if (macdCrossUp && ind.histogram > 0) {
     signal = 'BUY';
-    sl = entry - atr * slMultiplier;
-    tp = entry + atr * tpMultiplier;
+    sl = entry - ind.atr * slMultiplier;
+    tp = entry + ind.atr * tpMultiplier;
     reason = 'MACD bullish crossover';
-  } else if (macdCrossDown && macd.histogram < 0) {
+  } else if (macdCrossDown && ind.histogram < 0) {
     signal = 'SELL';
-    sl = entry + atr * slMultiplier;
-    tp = entry - atr * tpMultiplier;
+    sl = entry + ind.atr * slMultiplier;
+    tp = entry - ind.atr * tpMultiplier;
     reason = 'MACD bearish crossover';
   } else {
     reason = 'No MACD crossover';
@@ -82,12 +109,23 @@ async function analyze(broker, config = {}) {
     tp: parseFloat(tp.toFixed(5)),
     reason,
     indicators: {
-      macd: parseFloat(macd.macd.toFixed(5)),
-      signal: parseFloat(macd.signal.toFixed(5)),
-      histogram: parseFloat(macd.histogram.toFixed(5)),
-      atr: parseFloat(atr.toFixed(5)),
+      macd: parseFloat(ind.macd.toFixed(5)),
+      signal: parseFloat(ind.signal.toFixed(5)),
+      histogram: parseFloat(ind.histogram.toFixed(5)),
+      atr: parseFloat(ind.atr.toFixed(5)),
     },
   };
 }
 
-module.exports = { analyze, calculateEMA, calculateMACD, calculateATR };
+async function analyze(broker, config = {}) {
+  const timeframe = config.timeframe || 'H1';
+  const limit = config.limit || 100;
+  const candles = await broker.getCandles('GBPUSD', timeframe, limit);
+  if (!candles || candles.length < INDICATOR_OFFSET) {
+    return { signal: 'NONE', reason: 'Insufficient data' };
+  }
+  const precalc = precalcIndicators(candles, config);
+  return evaluate(precalc[precalc.length - 1], config);
+}
+
+module.exports = { analyze, precalcIndicators, evaluate, INDICATOR_OFFSET };

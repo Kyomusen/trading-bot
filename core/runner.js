@@ -44,7 +44,7 @@ class Runner {
     const configs = {
       capital: {
         apiKey: process.env.CAPITAL_API_KEY,
-        identifier: process.env.CAPITAL_IDENTIFIER,
+        identifier: process.env.CAPITAL_EMAIL,
         password: process.env.CAPITAL_PASSWORD,
         demo: process.env.CAPITAL_DEMO !== 'false',
       },
@@ -85,8 +85,10 @@ class Runner {
   }
 
   _pipValue(symbol, lotSize, priceDiff) {
-    const isMetal = symbol === 'XAUUSD' || symbol === 'XAGUSD';
-    const pipSize = isMetal ? 0.01 : 0.0001;
+    const s = symbol.toUpperCase();
+    const isMetal = s.includes('XAU') || s.includes('XAG') || s.includes('GOLD');
+    const isJpy = s.endsWith('JPY');
+    const pipSize = isMetal ? 0.01 : isJpy ? 0.01 : 0.0001;
     const dollarPerPipPerLot = isMetal ? 1 : 10;
     const pips = priceDiff / pipSize;
     return pips * lotSize * dollarPerPipPerLot;
@@ -102,15 +104,29 @@ class Runner {
       throw new Error(`No local candle data found for ${symbol} (${config.timeframe})`);
     }
 
+    const precalc = strategy.precalcIndicators
+      ? strategy.precalcIndicators(data, config.strategy)
+      : null;
+    const offset = strategy.INDICATOR_OFFSET || 50;
+
     const trades = [];
     let position = null;
     let balance = 10000;
+    const iterCount = precalc ? precalc.length : data.length - offset;
 
-    for (let i = 50; i < data.length; i++) {
-      const slice = data.slice(0, i + 1);
-      const signal = await strategy.analyze({
-        getCandles: async () => slice,
-      }, config.strategy);
+    for (let idx = 0; idx < iterCount; idx++) {
+      const dataIdx = offset + idx;
+      const current = data[dataIdx];
+
+      let signal;
+      if (precalc) {
+        signal = strategy.evaluate(precalc[idx], config.strategy);
+      } else {
+        const slice = data.slice(0, dataIdx + 1);
+        signal = await strategy.analyze({
+          getCandles: async () => slice,
+        }, config.strategy);
+      }
 
       if (!position && signal.signal !== 'NONE') {
         position = {
@@ -118,11 +134,10 @@ class Runner {
           entryPrice: signal.entry,
           sl: signal.sl,
           tp: signal.tp,
-          entryTime: data[i].time,
+          entryTime: current.time,
           size: config.lotSize,
         };
       } else if (position) {
-        const current = data[i];
         let exitPrice = null;
         let exitReason = '';
 

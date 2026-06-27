@@ -28,7 +28,7 @@ jobs:
         run: node core/runner.js live ${{ github.event.inputs.symbol }}
         env:
           CAPITAL_API_KEY: ${{ secrets.CAPITAL_API_KEY }}
-          CAPITAL_IDENTIFIER: ${{ secrets.CAPITAL_IDENTIFIER }}
+          CAPITAL_EMAIL: ${{ secrets.CAPITAL_EMAIL }}
           CAPITAL_PASSWORD: ${{ secrets.CAPITAL_PASSWORD }}
           CAPITAL_DEMO: ${{ vars.CAPITAL_DEMO }}
           OANDA_API_KEY: ${{ secrets.OANDA_API_KEY }}
