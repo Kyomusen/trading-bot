@@ -84,6 +84,14 @@ class Runner {
     return results;
   }
 
+  _pipValue(symbol, lotSize, priceDiff) {
+    const isMetal = symbol === 'XAUUSD' || symbol === 'XAGUSD';
+    const pipSize = isMetal ? 0.01 : 0.0001;
+    const dollarPerPipPerLot = isMetal ? 1 : 10;
+    const pips = priceDiff / pipSize;
+    return pips * lotSize * dollarPerPipPerLot;
+  }
+
   async runBacktest(symbol, candles = null) {
     const { config } = this.brokers.get(symbol) || {};
     if (!config) throw new Error(`Symbol ${symbol} not configured`);
@@ -127,10 +135,10 @@ class Runner {
         }
 
         if (exitPrice) {
-          const pips = position.type === 'BUY'
-            ? (exitPrice - position.entryPrice) * 10000
-            : (position.entryPrice - exitPrice) * 10000;
-          const pnl = pips * position.size * 10;
+          const priceDiff = position.type === 'BUY'
+            ? (exitPrice - position.entryPrice)
+            : (position.entryPrice - exitPrice);
+          const pnl = this._pipValue(symbol, position.size, priceDiff);
           balance += pnl;
           trades.push({
             symbol,
