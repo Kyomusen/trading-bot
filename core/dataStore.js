@@ -9,6 +9,31 @@ class DataStore {
     }
   }
 
+  static loadLocalCandles(symbol, timeframe) {
+    const dataDir = path.join(__dirname, '..', 'symbols', symbol, 'data');
+    const jsonFile = path.join(dataDir, `candles_${timeframe}.json`);
+    const csvFile = path.join(dataDir, `candles_${timeframe}.csv`);
+
+    if (fs.existsSync(jsonFile)) {
+      return JSON.parse(fs.readFileSync(jsonFile, 'utf8'));
+    }
+
+    if (fs.existsSync(csvFile)) {
+      const raw = fs.readFileSync(csvFile, 'utf8').trim().split('\n');
+      const headers = raw[0].split(',');
+      return raw.slice(1).map(line => {
+        const vals = line.split(',');
+        const row = {};
+        headers.forEach((h, i) => {
+          row[h.trim()] = isNaN(vals[i]) ? vals[i].trim() : parseFloat(vals[i]);
+        });
+        return row;
+      });
+    }
+
+    return null;
+  }
+
   saveBacktestResult(symbol, result) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `${symbol}_${timestamp}.json`;

@@ -23,6 +23,13 @@ class Runner {
       ? [getSymbolConfig(this.symbolFilter)].filter(Boolean)
       : getEnabledSymbols();
 
+    if (this.mode === 'backtest') {
+      for (const symConfig of symbols) {
+        this.brokers.set(symConfig.symbol, { broker: null, config: symConfig });
+      }
+      return;
+    }
+
     for (const symConfig of symbols) {
       const brokerType = symConfig.broker || 'capital';
       const brokerConfig = this._getBrokerConfig(brokerType);
@@ -78,11 +85,14 @@ class Runner {
   }
 
   async runBacktest(symbol, candles = null) {
-    const { broker, config } = this.brokers.get(symbol) || {};
-    if (!broker) throw new Error(`Symbol ${symbol} not configured`);
+    const { config } = this.brokers.get(symbol) || {};
+    if (!config) throw new Error(`Symbol ${symbol} not configured`);
 
     const strategy = require(`../symbols/${symbol}/strategy`);
-    const data = candles || await broker.getCandles(symbol, config.timeframe, 500);
+    const data = candles || DataStore.loadLocalCandles(symbol, config.timeframe);
+    if (!data || data.length === 0) {
+      throw new Error(`No local candle data found for ${symbol} (${config.timeframe})`);
+    }
 
     const trades = [];
     let position = null;
@@ -153,7 +163,7 @@ class Runner {
 
   async cleanup() {
     for (const [symbol, { broker }] of this.brokers) {
-      await broker.disconnect();
+      if (broker) await broker.disconnect();
     }
   }
 }

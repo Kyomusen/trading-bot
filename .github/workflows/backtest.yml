@@ -28,13 +28,6 @@ jobs:
       - name: Run backtest
         run: node core/runner.js backtest ${{ github.event.inputs.symbol }}
         env:
-          CAPITAL_API_KEY: ${{ secrets.CAPITAL_API_KEY }}
-          CAPITAL_IDENTIFIER: ${{ secrets.CAPITAL_IDENTIFIER }}
-          CAPITAL_PASSWORD: ${{ secrets.CAPITAL_PASSWORD }}
-          CAPITAL_DEMO: ${{ vars.CAPITAL_DEMO }}
-          OANDA_API_KEY: ${{ secrets.OANDA_API_KEY }}
-          OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID }}
-          OANDA_DEMO: ${{ vars.OANDA_DEMO }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_ERROR_WEBHOOK_URL: ${{ secrets.DISCORD_ERROR_WEBHOOK_URL }}
 
