@@ -1,6 +1,6 @@
 {
   "name": "trading-bot",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Multi-broker trading bot with pluggable strategies",
   "main": "core/runner.js",
   "scripts": {
@@ -11,7 +11,9 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "node-fetch": "^2.7.0"
+    "dukascopy-node": "^1.46.4",
+    "node-fetch": "^2.7.0",
+    "technicalindicators": "^3.1.0"
   },
   "devDependencies": {
     "eslint": "^8.56.0"

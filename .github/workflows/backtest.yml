@@ -9,12 +9,16 @@ on:
         type: choice
         options:
           - XAUUSD
-          - EURUSD
-          - GBPUSD
-          - GBPJPY
+          - USDJPY
+  schedule:
+    - cron: '0 6 * * 1'
 
 jobs:
   backtest:
+    strategy:
+      matrix:
+        symbol: [XAUUSD, USDJPY]
+      fail-fast: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,13 +31,13 @@ jobs:
       - run: npm ci
 
       - name: Run backtest
-        run: node core/runner.js backtest ${{ github.event.inputs.symbol }}
+        run: node core/runner.js backtest ${{ matrix.symbol }}
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_ERROR_WEBHOOK_URL: ${{ secrets.DISCORD_ERROR_WEBHOOK_URL }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: backtest-${{ github.event.inputs.symbol }}-${{ github.run_id }}
+          name: backtest-${{ matrix.symbol }}-${{ github.run_id }}
           path: backtests/
           retention-days: 7
