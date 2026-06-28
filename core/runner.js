@@ -40,20 +40,8 @@ class Runner {
       ? [getSymbolConfig(this.symbolFilter)].filter(Boolean)
       : getEnabledSymbols();
 
-    if (this.mode === 'backtest') {
-      for (const symConfig of symbols) {
-        this.brokers.set(symConfig.symbol, { broker: null, config: symConfig });
-      }
-      return;
-    }
-
     for (const symConfig of symbols) {
-      const brokerType = symConfig.broker || 'capital';
-      const brokerConfig = this._getBrokerConfig(brokerType);
-      const broker = createBroker(brokerType, brokerConfig);
-      await broker.connect();
-      this.brokers.set(symConfig.symbol, { broker, config: symConfig });
-      console.log(`Connected to ${brokerType} for ${symConfig.symbol}`);
+      this.brokers.set(symConfig.symbol, { broker: null, config: symConfig });
     }
   }
 
@@ -76,13 +64,19 @@ class Runner {
 
   async runLive() {
     const results = [];
-    for (const [symbol, { broker, config }] of this.brokers) {
+    for (const [symbol, entry] of this.brokers) {
+      const { config } = entry;
       try {
         const strategy = require(`../symbols/${symbol}/strategy`);
-        const signal = await strategy.analyze(broker, config.strategy);
-        console.log(`${symbol}: ${signal.signal} @ ${signal.entry} (SL: ${signal.sl}, TP: ${signal.tp})`);
+        const signal = await strategy.analyzeFromData(config.strategy);
 
         if (signal.signal !== 'NONE') {
+          const brokerType = config.broker || 'capital';
+          const brokerConfig = this._getBrokerConfig(brokerType);
+          const broker = createBroker(brokerType, brokerConfig);
+          await broker.connect();
+          entry.broker = broker;
+
           const positions = await broker.getOpenPositions(symbol);
           if (positions.length < config.maxPositions) {
             await broker.placeOrder(symbol, signal.signal, config.lotSize, signal.sl, signal.tp);
@@ -90,6 +84,7 @@ class Runner {
           }
         }
 
+        console.log(`${symbol}: ${signal.signal}`);
         await this.discord.sendLiveTrade(signal);
         results.push({ symbol, signal, success: true });
       } catch (err) {

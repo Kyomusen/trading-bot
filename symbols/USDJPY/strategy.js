@@ -29,6 +29,7 @@ function evaluateWrapper(ind, h4Trend = 'neutral', config = {}) {
 
 module.exports = {
   analyze: (broker, config) => shared.analyze(broker, { ...config, symbol: SYMBOL }),
+  analyzeFromData: (config) => shared.analyzeFromData(SYMBOL, config),
   evaluate: evaluateWrapper,
   precalcIndicators: shared.precalcIndicators,
   INDICATOR_OFFSET: shared.INDICATOR_OFFSET,

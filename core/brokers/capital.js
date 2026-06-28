@@ -1,6 +1,14 @@
 const BaseBroker = require('./base');
 const fetch = require('node-fetch');
 
+const EPIC_MAP = {
+  XAUUSD: 'GOLD',
+};
+
+function resolveEpic(symbol) {
+  return EPIC_MAP[symbol] || symbol;
+}
+
 class CapitalBroker extends BaseBroker {
   constructor(config = {}) {
     super(config);
@@ -64,8 +72,9 @@ class CapitalBroker extends BaseBroker {
   }
 
   async getCandles(symbol, timeframe, limit = 100) {
+    const epic = resolveEpic(symbol);
     const resolution = this._mapTimeframe(timeframe);
-    const res = await fetch(`${this.baseUrl}/api/v1/prices/${symbol}?resolution=${resolution}&max=${limit}`, {
+    const res = await fetch(`${this.baseUrl}/api/v1/prices/${epic}?resolution=${resolution}&max=${limit}`, {
       headers: this._authHeaders(),
     });
 
@@ -98,9 +107,10 @@ class CapitalBroker extends BaseBroker {
   }
 
   async placeOrder(symbol, type, lotSize, sl, tp, comment = '') {
+    const epic = resolveEpic(symbol);
     const direction = type === 'BUY' ? 'BUY' : 'SELL';
     const body = {
-      epic: symbol,
+      epic,
       direction,
       size: lotSize,
       orderType: 'MARKET',
@@ -136,9 +146,10 @@ class CapitalBroker extends BaseBroker {
       throw new Error(`Get positions failed: ${res.status}`);
     }
 
+    const epic = resolveEpic(symbol);
     const data = await res.json();
     return data.positions
-      .filter(p => p.market.epic === symbol)
+      .filter(p => p.market.epic === epic)
       .map(p => ({
         id: p.position.dealId,
         symbol: p.market.epic,

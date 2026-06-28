@@ -230,6 +230,59 @@ function precalcIndicators(candles) {
 
 const INDICATOR_OFFSET = 50;
 
+const { fetchCandles } = require('./dataSource');
+
+function normalizeSignal(symbol, decision, ind) {
+  if (!decision) return { symbol, signal: 'NONE', reason: 'No setup matched', indicators: ind };
+  const entryPrice = decision.action === 'BUY'
+    ? ind.currentPrice + 2 * pipToPrice(1, symbol)
+    : ind.currentPrice - 2 * pipToPrice(1, symbol);
+  const slPrice = decision.action === 'BUY'
+    ? entryPrice - decision.slPips * pipToPrice(1, symbol)
+    : entryPrice + decision.slPips * pipToPrice(1, symbol);
+  const tpPrice = decision.action === 'BUY'
+    ? entryPrice + decision.tpPips * pipToPrice(1, symbol)
+    : entryPrice - decision.tpPips * pipToPrice(1, symbol);
+  return {
+    symbol,
+    signal: decision.action,
+    entry: parseFloat(entryPrice.toFixed(5)),
+    sl: parseFloat(slPrice.toFixed(5)),
+    tp: parseFloat(tpPrice.toFixed(5)),
+    reason: decision.setup,
+    confidence: decision.confidence,
+    indicators: ind,
+  };
+}
+
+async function analyzeFromData(symbol, config = {}) {
+  const timeframe = config.timeframe || 'H1';
+  const limit = config.limit || 100;
+  const tfMap = { H1: 'h1', H4: 'h4', D1: 'd1', M1: 'm1', M5: 'm5', M15: 'm15', M30: 'm30' };
+
+  try {
+    const candles = await fetchCandles(symbol, tfMap[timeframe] || 'h1', limit);
+    if (!candles || candles.length < INDICATOR_OFFSET) {
+      return { symbol, signal: 'NONE', reason: 'Insufficient data from Dukascopy' };
+    }
+    const ind = getIndicators(candles);
+
+    let h4Trend = 'neutral';
+    try {
+      const h4Candles = await fetchCandles(symbol, 'h4', 50);
+      if (h4Candles && h4Candles.length >= 20) {
+        const h4Ind = getIndicators(h4Candles);
+        h4Trend = h4Ind.emaTrend;
+      }
+    } catch {}
+
+    const decision = evaluate({ symbol, h4Trend, ind, config });
+    return normalizeSignal(symbol, decision, ind);
+  } catch (err) {
+    return { symbol, signal: 'NONE', reason: `Data fetch failed: ${err.message}` };
+  }
+}
+
 async function analyze(broker, config = {}) {
   const symbol = config.symbol || 'XAUUSD';
   const timeframe = config.timeframe || 'H1';
@@ -278,5 +331,7 @@ module.exports = {
   evaluate,
   atrParams,
   analyze,
+  analyzeFromData,
+  normalizeSignal,
   INDICATOR_OFFSET,
 };
