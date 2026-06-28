@@ -116,8 +116,8 @@ class BacktestReport {
       <tr>
         <td>${t.exitTime || t.entryTime}</td>
         <td>${t.type}</td>
-        <td>${t.entryPrice}</td>
-        <td>${t.exitPrice}</td>
+        <td>${t.entry}</td>
+        <td>${t.exit}</td>
         <td>${t.sl}</td>
         <td>${t.tp}</td>
         <td class="${t.pnl >= 0 ? 'green' : 'red'}">${t.pnl}</td>

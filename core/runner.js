@@ -68,7 +68,7 @@ class Runner {
       const { config } = entry;
       try {
         const strategy = require(`../symbols/${symbol}/strategy`);
-        const signal = await strategy.analyzeFromData(config.strategy);
+        const signal = await strategy.analyzeFromData(config);
 
         if (signal.signal !== 'NONE') {
           const brokerType = config.broker || 'capital';
@@ -187,6 +187,7 @@ class Runner {
       tradeHistory: [],
     };
 
+    let h4Ptr = 0;
     for (let seg = 0; seg < numSeg; seg++) {
       const segStart = startIdx + seg * segSize;
       const segEnd = seg < numSeg - 1 ? segStart + segSize : data.length;
@@ -195,7 +196,6 @@ class Runner {
       symState.position = null;
       symState.consecutiveLosses = 0;
 
-      let h4Ptr = 0;
       const getH4Trend = (h1Time) => {
         if (!h4Precalc || h4Precalc.length === 0) return 'neutral';
         const t = new Date(h1Time).getTime();

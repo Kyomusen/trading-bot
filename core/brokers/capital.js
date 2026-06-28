@@ -3,6 +3,7 @@ const fetch = require('node-fetch');
 
 const EPIC_MAP = {
   XAUUSD: 'GOLD',
+  USDJPY: 'USDJPY',
 };
 
 function resolveEpic(symbol) {
@@ -117,8 +118,6 @@ class CapitalBroker extends BaseBroker {
       currencyCode: 'USD',
       guaranteedStop: false,
       forceOpen: true,
-      limitDistance: tp ? Math.abs(tp - (direction === 'BUY' ? 0 : 0)) : undefined,
-      stopDistance: sl ? Math.abs(sl - (direction === 'BUY' ? 0 : 0)) : undefined,
       limitLevel: tp,
       stopLevel: sl,
     };

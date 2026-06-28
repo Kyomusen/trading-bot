@@ -62,6 +62,10 @@ class DiscordNotifier {
   }
 
   async sendError(error, context = {}) {
+    if (!this.errorWebhookUrl) {
+      console.log('No Discord error webhook configured, skipping error notification');
+      return;
+    }
     const embed = {
       title: '❌ Trading Bot Error',
       color: 0xff0000,

@@ -6,10 +6,25 @@ on:
     - cron: '0 6 * * 1'
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: set-matrix
+        run: |
+          SYMBOLS=$(node -e "
+            const fs=require('fs');
+            const dirs=fs.readdirSync('symbols').filter(d=>fs.statSync('symbols/'+d).isDirectory());
+            console.log(JSON.stringify(dirs));
+          ")
+          echo "matrix={\"symbol\":$SYMBOLS}" >> $GITHUB_OUTPUT
+
   backtest:
+    needs: setup
     strategy:
-      matrix:
-        symbol: [XAUUSD, USDJPY]
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
       fail-fast: false
     runs-on: ubuntu-latest
     steps:

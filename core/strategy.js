@@ -84,7 +84,7 @@ function getIndicators(candles) {
   const ema50 = calcEMA(close, 50);
   const macd = calcMACD(close);
   const atr = calcATR(high, low, close);
-  const sr = calcSupportResistance(candles, 24);
+  const sr = calcSupportResistance(candles, 24, ema50, atr);
   const currentPrice = close[close.length - 1];
   return {
     currentPrice, rsi, ema20, ema50,
@@ -115,8 +115,14 @@ function evaluate(params) {
   const { symbol, h4Trend, ind, config = {} } = params;
   const { rsi, ema20, ema50, emaTrend: h1Trend, macd, atr, currentPrice, nearSupport, nearResistance } = ind;
   if (rsi == null || !atr) return null;
-  const cfg = SYMBOL_STRATEGY[symbol];
+  let cfg = { ...SYMBOL_STRATEGY[symbol] };
   if (!cfg) return null;
+  if (config.allowedSetups) cfg.allowedSetups = config.allowedSetups;
+  if (config.rsi) cfg.rsi = config.rsi;
+  if (config.atrSlM != null) cfg.atrSlM = config.atrSlM;
+  if (config.atrTpM != null) cfg.atrTpM = config.atrTpM;
+  if (config.minSl != null) cfg.minSl = config.minSl;
+  if (config.minTp != null) cfg.minTp = config.minTp;
   const { slPips, tpPips } = atrParams(atr, symbol, config);
   const aboveEma50 = currentPrice && ema50 ? currentPrice > ema50 : false;
   const belowEma50 = currentPrice && ema50 ? currentPrice < ema50 : false;

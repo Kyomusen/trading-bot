@@ -36,20 +36,16 @@ function run(opts) {
     lossSizing: { enabled: opts.lossSizing ?? true, reduceAfter: 1, reduceTo: 0.65, minFactor: 0.1 },
   };
 
-  // Override SYMBOL_STRATEGY for this run
+  // Pass SYMBOL_STRATEGY overrides through config to avoid mutating shared state
   const symCfg = shared.SYMBOL_STRATEGY.USDJPY;
-  const symOverride = {
-    ...symCfg,
+  Object.assign(cfg, {
     allowedSetups: opts.setups || symCfg.allowedSetups,
     rsi: opts.rsi || symCfg.rsi,
-    emaFast: opts.emaFast || 9,
-    emaSlow: opts.emaSlow || 21,
     atrSlM: opts.atrSlM ?? symCfg.atrSlM,
     atrTpM: opts.atrTpM ?? symCfg.atrTpM,
     minSl: opts.minSl ?? symCfg.minSl,
     minTp: opts.minTp ?? symCfg.minTp,
-  };
-  shared.SYMBOL_STRATEGY.USDJPY = symOverride;
+  });
 
   let balance = 500, position = null, trades = [], cl = 0, th = [];
   let peak = balance, mdd = 0;
