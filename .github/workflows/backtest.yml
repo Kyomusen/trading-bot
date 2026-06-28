@@ -2,14 +2,6 @@ name: Backtest
 
 on:
   workflow_dispatch:
-    inputs:
-      symbol:
-        description: 'Symbol to backtest'
-        required: true
-        type: choice
-        options:
-          - XAUUSD
-          - USDJPY
   schedule:
     - cron: '0 6 * * 1'
 
