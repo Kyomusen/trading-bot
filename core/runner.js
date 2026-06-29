@@ -4,7 +4,7 @@ const DataStore = require('./dataStore');
 const BacktestReport = require('./backtestReport');
 const DiscordNotifier = require('./discord');
 const { pipToPrice, pipValuePerLot } = require('./strategy');
-const { fetchCandlesCached, fetchCandles } = require('./dataSource');
+const { fetchCandlesCached } = require('./dataSource');
 const { generateChart } = require('./chart');
 const fs = require('fs');
 const path = require('path');
@@ -488,15 +488,12 @@ class Runner {
   }
 
   async cleanup() {
-    for (const [symbol, { broker }] of this.brokers) {
+    for (const entry of this.brokers) {
+      const broker = entry[1].broker;
       if (broker) await broker.disconnect();
     }
   }
 }
-
-function getPrice(c) { return c.close; }
-function getHigh(c) { return c.high; }
-function getLow(c) { return c.low; }
 
 async function main() {
   const mode = process.argv[2] || 'live';

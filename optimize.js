@@ -147,17 +147,6 @@ function run(opts) {
   return { trades: closed.length, wr, pf, netPnl, mdd, score, retPct, final: balance };
 }
 
-function rsi(buyMin, buyMax, sellMin, sellMax) {
-  return {
-    trend_buy: { min: buyMin ?? 30, max: buyMax ?? 50 },
-    trend_sell: { min: sellMin ?? 50, max: sellMax ?? 70 },
-    momentum_buy: { min: buyMin ?? 48, max: buyMax ?? 62 },
-    momentum_sell: { min: sellMin ?? 28, max: sellMax ?? 48 },
-    pullback_buy: { min: buyMin ?? 30, max: buyMax ?? 50 },
-    pullback_sell: { min: sellMin ?? 55, max: sellMax ?? 75 },
-  };
-}
-
 const results = [];
 
 console.log('=== Phase 1: Setup Types ===');

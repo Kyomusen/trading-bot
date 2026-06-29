@@ -273,7 +273,9 @@ async function analyzeFromData(symbol, config = {}, candles = null) {
         const h4Ind = getIndicators(h4Candles);
         h4Trend = h4Ind.emaTrend;
       }
-    } catch {}
+    } catch {
+      // H4 candles are optional; fall back to neutral trend
+    }
 
     const decision = evaluate({ symbol, h4Trend, ind, config });
     return normalizeSignal(symbol, decision, ind);

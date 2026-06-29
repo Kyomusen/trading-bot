@@ -151,7 +151,7 @@ class CapitalBroker extends BaseBroker {
     return map[tf] || 'HOUR';
   }
 
-  async placeOrder(symbol, type, size, sl, tp, comment = '', trailingOptions = null) {
+  async placeOrder(symbol, type, size, sl, tp, _comment = '', trailingOptions = null) {
     const epic = resolveEpic(symbol);
     const direction = type === 'BUY' ? 'BUY' : 'SELL';
     const body = {
@@ -187,7 +187,6 @@ class CapitalBroker extends BaseBroker {
   }
 
   async validateSize(symbol, size) {
-    const epic = resolveEpic(symbol);
     let rules;
     try {
       rules = await this.getDealingRules(symbol);

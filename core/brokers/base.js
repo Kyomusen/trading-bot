@@ -12,19 +12,19 @@ class BaseBroker {
     throw new Error('disconnect() must be implemented by subclass');
   }
 
-  async getCandles(symbol, timeframe, limit = 100) {
+  async getCandles(_symbol, _timeframe, _limit = 100) {
     throw new Error('getCandles() must be implemented by subclass');
   }
 
-  async placeOrder(symbol, type, lotSize, sl, tp, comment = '', trailingOptions = null) {
+  async placeOrder(_symbol, _type, _lotSize, _sl, _comment = '', _trailingOptions = null) {
     throw new Error('placeOrder() must be implemented by subclass');
   }
 
-  async getOpenPositions(symbol) {
+  async getOpenPositions(_symbol) {
     throw new Error('getOpenPositions() must be implemented by subclass');
   }
 
-  async closePosition(positionId) {
+  async closePosition(_positionId) {
     throw new Error('closePosition() must be implemented by subclass');
   }
 
@@ -32,7 +32,7 @@ class BaseBroker {
     throw new Error('getAccountInfo() must be implemented by subclass');
   }
 
-  async getSymbolInfo(symbol) {
+  async getSymbolInfo(_symbol) {
     throw new Error('getSymbolInfo() must be implemented by subclass');
   }
 
