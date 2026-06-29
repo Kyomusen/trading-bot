@@ -125,7 +125,7 @@ function calcEMA(values, period) {
   return result;
 }
 
-function generateChart(candles, ind, position = null, symbol = 'XAUUSD', width = 600, height = 300) {
+function generateChart(candles, ind, position = null, symbol = 'XAUUSD', width = 600, height = 300, fullCloses = null) {
   const px = new Uint8Array(width * height * 4);
 
   const BG      = [18,  18,  36,  255];
@@ -135,6 +135,7 @@ function generateChart(candles, ind, position = null, symbol = 'XAUUSD', width =
   const BULL    = [38,  180, 155, 255];
   const BEAR    = [225,  72,  72, 255];
   const EMA_C   = [255, 200,  50, 255];
+  const EMA50_C = [ 50, 200, 255, 255];
   const TXT     = [175, 175, 200, 255];
   const HDR     = [215, 215, 235, 255];
   const DIM     = [110, 110, 135, 255];
@@ -194,20 +195,30 @@ function generateChart(candles, ind, position = null, symbol = 'XAUUSD', width =
   }
 
   const closes = valid.map(v => v.c);
-  const ema20 = calcEMA(closes, 20);
-  const ema50 = calcEMA(closes, 50);
+  const emaValues = fullCloses || closes;
+  const ema20 = calcEMA(emaValues, 20);
+  const ema50 = calcEMA(emaValues, 50);
+  const ema20Slice = ema20.slice(-valid.length);
+  const ema50Slice = ema50.slice(-valid.length);
 
-  if (ema20.length === valid.length) {
-    let prev = null;
+  function drawEMALine(emaSlice, color, label) {
+    let prev = null, lastX = null, lastY = null;
     for (let vi = 0; vi < valid.length; vi++) {
-      const val = ema20[vi];
+      const val = emaSlice[vi];
       if (val == null) { prev = null; continue; }
       const cx = Math.round(xOf(vi));
       const cy = Math.round(yOf(val));
-      if (prev) drawLine(px, width, prev.x, prev.y, cx, cy, EMA_C);
+      if (prev) drawLine(px, width, prev.x, prev.y, cx, cy, color);
       prev = { x: cx, y: cy };
+      lastX = cx; lastY = cy;
+    }
+    if (lastX != null && label) {
+      drawText(px, width, lastX - label.length * 6 - 2, lastY - 3, label, color);
     }
   }
+
+  drawEMALine(ema20Slice, EMA_C, 'EMA20');
+  drawEMALine(ema50Slice, EMA50_C, 'EMA50');
 
   for (let vi = 0; vi < valid.length; vi++) {
     const v   = valid[vi];
@@ -228,8 +239,6 @@ function generateChart(candles, ind, position = null, symbol = 'XAUUSD', width =
   if (position) {
     const lines = [
       { price: position.entryPrice, col: ENTRY_C, label: 'EN' },
-      { price: position.stopLoss,   col: SL_C,    label: 'SL' },
-      { price: position.takeProfit, col: TP_C,    label: 'TP' },
     ].filter(l => l.price != null);
 
     for (const { price, col, label } of lines) {

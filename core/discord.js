@@ -50,8 +50,6 @@ class DiscordNotifier {
       fields: [
         { name: 'Signal', value: signal.signal, inline: true },
         { name: 'Entry', value: signal.entry?.toString() ?? '-', inline: true },
-        { name: 'SL', value: signal.sl?.toString() ?? '-', inline: true },
-        { name: 'TP', value: signal.tp?.toString() ?? '-', inline: true },
         { name: 'Reason', value: signal.reason ?? '-', inline: false },
       ],
       timestamp: new Date().toISOString(),

@@ -102,12 +102,9 @@ class Runner {
         const candles = await fetchCandlesCached(symbol, config.timeframe || 'H1', config);
         console.log(`[${symbol}] Data: ${candles.length} candles`);
 
-        const chartCandles = candles.slice(-DISPLAY_LIMIT);
-        const ind = shared.getIndicators(candles);
-        const chartBuffer = generateChart(chartCandles, ind, null, symbol);
-
         const signal = await strategy.analyzeFromData(config, candles);
 
+        let positionData = null;
         if (signal.signal !== 'NONE') {
           const brokerType = config.broker || 'capital';
           const brokerConfig = this._getBrokerConfig(brokerType);
@@ -151,6 +148,7 @@ class Runner {
               if (finalSize > 0) {
                 await broker.placeOrder(symbol, signal.signal, finalSize, signal.sl, signal.tp);
                 console.log(`[${symbol}] Order placed: ${signal.signal} size=${finalSize}`);
+                positionData = { entryPrice: signal.entry, stopLoss: signal.sl, takeProfit: signal.tp };
 
                 const trades = loadTrades();
                 trades.push({
@@ -170,6 +168,10 @@ class Runner {
             }
           }
         }
+
+        const chartCandles = candles.slice(-DISPLAY_LIMIT);
+        const ind = shared.getIndicators(candles);
+        const chartBuffer = generateChart(chartCandles, ind, positionData, symbol, 600, 300, candles.map(c => c.close));
 
         console.log(`${symbol}: ${signal.signal}`);
         await this.discord.sendLiveTrade(signal, chartBuffer);
