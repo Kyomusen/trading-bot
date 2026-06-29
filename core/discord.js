@@ -52,8 +52,9 @@ class DiscordNotifier {
     const embed = {
       title: `${emoji} Live Signal: ${signal.signal} ${signal.symbol}`,
       color,
-      description: `**Entry**: ${signal.entry?.toString() ?? '-'}　**SL**: ${signal.sl?.toString() ?? '-'}`,
       fields: [
+        { name: '📍 Entry', value: signal.entry?.toString() ?? '-', inline: true },
+        { name: '🛑 SL', value: signal.sl?.toString() ?? '-', inline: true },
         { name: '📊 Technicals', value: `RSI: ${signal.indicators?.rsi?.toFixed(1) ?? '-'} | ATR: ${signal.indicators?.atr?.toFixed(2) ?? '-'}`, inline: true },
         { name: '📦 Lot Size', value: signal.lotSize?.toString() ?? '-', inline: true },
         { name: '📝 Reason', value: signal.reason ?? '-', inline: false },
