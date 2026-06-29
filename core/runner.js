@@ -92,6 +92,7 @@ class Runner {
     saveState(state);
     console.log(`\n🤖 Live Round #${state.round}`);
     if (!state.lastSignals) state.lastSignals = {};
+    if (!state.positions) state.positions = {};
 
     const results = [];
     for (const [symbol, entry] of this.brokers) {
@@ -103,6 +104,18 @@ class Runner {
         const candles = await fetchCandlesCached(symbol, config.timeframe || 'H1', config);
         console.log(`[${symbol}] Data: ${candles.length} candles`);
 
+        // Connect broker early if not already connected
+        if (!entry.broker) {
+          const brokerType = config.broker || 'capital';
+          const brokerConfig = this._getBrokerConfig(brokerType);
+          const broker = createBroker(brokerType, brokerConfig);
+          await broker.connect();
+          entry.broker = broker;
+        }
+
+        // Manage existing positions: update trailing stop progressively
+        await this._managePositions(symbol, config, candles, state, entry);
+
         const signal = await strategy.analyzeFromData(config, candles);
 
         if (signal.signal !== 'NONE' && this._isDuplicateSignal(state.lastSignals, symbol, signal)) {
@@ -113,11 +126,7 @@ class Runner {
 
         let positionData = null;
         if (signal.signal !== 'NONE') {
-          const brokerType = config.broker || 'capital';
-          const brokerConfig = this._getBrokerConfig(brokerType);
-          const broker = createBroker(brokerType, brokerConfig);
-          await broker.connect();
-          entry.broker = broker;
+          const broker = entry.broker;
 
           const positions = await broker.getOpenPositions(symbol);
           if (positions.length >= (config.maxPositions || 1)) {
@@ -164,6 +173,16 @@ class Runner {
                 console.log(`[${symbol}] Order placed: ${signal.signal} size=${finalSize}`);
                 positionData = { entryPrice: signal.entry, stopLoss: signal.sl };
                 signal.lotSize = finalSize;
+
+                state.positions[symbol] = {
+                  type: signal.signal,
+                  entry: signal.entry,
+                  atrValue: signal.indicators?.atr || 0,
+                  bestPrice: signal.entry,
+                  currentTrailDist: config.trailing ? (config.trailingDistance ?? 0.1) : null,
+                  trailingActivated: false,
+                };
+                saveState(state);
 
                 const trades = loadTrades();
                 trades.push({
@@ -245,6 +264,55 @@ class Runner {
     const maxMul = adCfg.max ?? 1.5;
     if (winRate >= 0.5) return 1 + (winRate - 0.5) * 2 * (maxMul - 1);
     return 1 - (0.5 - winRate) * 2 * (1 - minMul);
+  }
+
+  async _managePositions(symbol, config, candles, state, entry) {
+    const sp = state.positions?.[symbol];
+    if (!sp || !sp.atrValue || sp.atrValue <= 0) return;
+    if (!config.trailing) return;
+
+    try {
+      const positions = await entry.broker.getOpenPositions(symbol);
+      if (positions.length === 0) {
+        delete state.positions[symbol];
+        saveState(state);
+        return;
+      }
+      const pos = positions[0];
+
+      const currentBest = sp.type === 'BUY'
+        ? Math.max(...candles.map(c => c.high))
+        : Math.min(...candles.map(c => c.low));
+      if (sp.type === 'BUY' && currentBest > sp.bestPrice) sp.bestPrice = currentBest;
+      else if (sp.type === 'SELL' && currentBest < sp.bestPrice) sp.bestPrice = currentBest;
+
+      const profitPct = sp.type === 'BUY'
+        ? (sp.bestPrice - sp.entry) / sp.atrValue
+        : (sp.entry - sp.bestPrice) / sp.atrValue;
+
+      const baseActivate = config.trailingActivate ?? 0.2;
+      const baseDist = config.trailingDistance ?? 0.1;
+      const maxDist = config.trailingDistanceMax ?? 0.5;
+      const progFactor = config.trailingProgressive ?? 0.01;
+
+      if (profitPct >= baseActivate) {
+        const trailDist = Math.min(
+          maxDist,
+          Math.max(0.02, baseDist + (profitPct - baseActivate) * progFactor)
+        );
+
+        if (Math.abs(trailDist - (sp.currentTrailDist || 0)) > 0.001) {
+          const stopDistPrice = parseFloat((trailDist * sp.atrValue).toFixed(5));
+          await entry.broker.updatePositionTrailingStop(pos.id, stopDistPrice);
+          sp.currentTrailDist = trailDist;
+          sp.trailingActivated = true;
+          console.log(`[${symbol}] Trailing stop updated: dist=${trailDist.toFixed(4)} ATR (stopDistance=${stopDistPrice})`);
+          saveState(state);
+        }
+      }
+    } catch (err) {
+      console.error(`[${symbol}] Position management error:`, err.message);
+    }
   }
 
   runBacktest(symbol, candles = null) {

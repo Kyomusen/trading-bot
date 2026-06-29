@@ -186,6 +186,22 @@ class CapitalBroker extends BaseBroker {
     return res.json();
   }
 
+  async updatePositionTrailingStop(dealId, stopDistance) {
+    const res = await fetch(`${this.baseUrl}/api/v1/positions/${dealId}`, {
+      method: 'PUT',
+      headers: this._authHeaders(),
+      body: JSON.stringify({
+        trailingStop: true,
+        stopDistance: parseFloat(stopDistance.toFixed(5)),
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Update trailing stop failed: ${res.status} - ${err}`);
+    }
+    return res.json();
+  }
+
   async validateSize(symbol, size) {
     let rules;
     try {

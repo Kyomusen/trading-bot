@@ -20,6 +20,10 @@ class BaseBroker {
     throw new Error('placeOrder() must be implemented by subclass');
   }
 
+  async updatePositionTrailingStop(_dealId, _stopDistance) {
+    throw new Error('updatePositionTrailingStop() must be implemented by subclass');
+  }
+
   async getOpenPositions(_symbol) {
     throw new Error('getOpenPositions() must be implemented by subclass');
   }
