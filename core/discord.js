@@ -7,13 +7,9 @@ class DiscordNotifier {
     this.errorWebhookUrl = errorWebhookUrl || webhookUrl;
   }
 
-  async send(embed) {
-    if (!this.webhookUrl) {
-      console.log('No Discord webhook configured, skipping notification');
-      return;
-    }
+  async _post(webhookUrl, embed) {
     try {
-      await fetch(this.webhookUrl, {
+      await fetch(webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ embeds: [embed] }),
@@ -21,6 +17,14 @@ class DiscordNotifier {
     } catch (err) {
       console.error('Discord send failed:', err.message);
     }
+  }
+
+  async send(embed) {
+    if (!this.webhookUrl) {
+      console.log('No Discord webhook configured, skipping notification');
+      return;
+    }
+    await this._post(this.webhookUrl, embed);
   }
 
   async sendWithAttachment(embed, buffer, filename = 'chart.png') {
@@ -44,17 +48,15 @@ class DiscordNotifier {
 
   async sendLiveTrade(signal, chartBuffer = null) {
     const color = signal.signal === 'BUY' ? 0x00ff00 : signal.signal === 'SELL' ? 0xff0000 : 0x808080;
+    const emoji = signal.signal === 'BUY' ? '🟢' : signal.signal === 'SELL' ? '🔴' : '⚪';
     const embed = {
-      title: `📊 Live Signal: ${signal.symbol}`,
+      title: `${emoji} Live Signal: ${signal.signal} ${signal.symbol}`,
       color,
+      description: `**Entry**: ${signal.entry?.toString() ?? '-'}　**SL**: ${signal.sl?.toString() ?? '-'}`,
       fields: [
-        { name: 'Signal', value: signal.signal, inline: true },
-        { name: 'Entry', value: signal.entry?.toString() ?? '-', inline: true },
-        { name: 'SL', value: signal.sl?.toString() ?? '-', inline: true },
-        { name: 'Lot Size', value: signal.lotSize?.toString() ?? '-', inline: true },
-        { name: 'RSI', value: signal.indicators?.rsi?.toFixed(1) ?? '-', inline: true },
-        { name: 'ATR', value: signal.indicators?.atr?.toFixed(2) ?? '-', inline: true },
-        { name: 'Reason', value: signal.reason ?? '-', inline: false },
+        { name: '📊 Technicals', value: `RSI: ${signal.indicators?.rsi?.toFixed(1) ?? '-'} | ATR: ${signal.indicators?.atr?.toFixed(2) ?? '-'}`, inline: true },
+        { name: '📦 Lot Size', value: signal.lotSize?.toString() ?? '-', inline: true },
+        { name: '📝 Reason', value: signal.reason ?? '-', inline: false },
       ],
       timestamp: new Date().toISOString(),
       footer: { text: 'Trading Bot' },
@@ -68,22 +70,20 @@ class DiscordNotifier {
   }
 
   async sendBacktestReport(report) {
+    const emoji = report.netProfit >= 0 ? '📈' : '📉';
     const embed = {
-      title: `📈 Backtest Result: ${report.symbol}`,
+      title: `${emoji} Backtest Results: ${report.symbol}`,
       color: 0x0099ff,
+      description: `**Net Profit**: ${report.netProfit.toFixed(2)}　**Return**: ${report.returnPct.toFixed(2)}%　**Win Rate**: ${report.winRate.toFixed(2)}%`,
       fields: [
-        { name: 'Return %', value: report.returnPct.toFixed(2) + '%', inline: true },
-        { name: 'Win Rate', value: report.winRate.toFixed(2) + '%', inline: true },
-        { name: 'Profit Factor', value: report.profitFactor.toFixed(2), inline: true },
-        { name: 'Max Drawdown', value: report.maxDrawdown.toFixed(2) + '%', inline: true },
-        { name: 'Total Trades', value: report.totalTrades.toString(), inline: true },
-        { name: 'Net Profit', value: report.netProfit.toFixed(2), inline: true },
+        { name: '💰 Performance', value: `Profit Factor: ${report.profitFactor.toFixed(2)} | Max Drawdown: ${report.maxDrawdown.toFixed(2)}%`, inline: true },
+        { name: '🔄 Statistics', value: `Total Trades: ${report.totalTrades}`, inline: true },
       ],
       timestamp: new Date().toISOString(),
       footer: { text: 'Backtest Report' },
     };
     if (report.artifactUrl) {
-      embed.fields.push({ name: 'Artifact', value: `[Download](${report.artifactUrl})`, inline: false });
+      embed.fields.push({ name: '🔗 Artifact', value: `[View Detailed Report](${report.artifactUrl})`, inline: false });
     }
     await this.send(embed);
   }
@@ -94,20 +94,17 @@ class DiscordNotifier {
       return;
     }
     const embed = {
-      title: '❌ Trading Bot Error',
+      title: '🚨 Critical Error Detected',
       color: 0xff0000,
+      description: `\`${error.message || String(error)}\``,
       fields: [
-        { name: 'Error', value: error.message || String(error), inline: false },
-        { name: 'Context', value: JSON.stringify(context, null, 2).slice(0, 1000), inline: false },
+        { name: '🔍 Context', value: `\`\`\`json\n${JSON.stringify(context, null, 2).slice(0, 950)}\n\`\`\``, inline: false },
+        { name: '🛠️ Action Required', value: 'Check logs and verify system status.', inline: false },
       ],
       timestamp: new Date().toISOString(),
-      footer: { text: 'Trading Bot Error' },
+      footer: { text: 'Error Monitor' },
     };
-    await fetch(this.errorWebhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ embeds: [embed] }),
-    }).catch(() => {});
+    await this._post(this.errorWebhookUrl, embed);
   }
 }
 
