@@ -1,4 +1,4 @@
-const { createBroker } = require('./brokers');
+const { createBroker, CapitalBroker } = require('./brokers');
 const { getEnabledSymbols, getSymbolConfig } = require('../symbols.config');
 const DataStore = require('./dataStore');
 const BacktestReport = require('./backtestReport');
@@ -128,9 +128,11 @@ class Runner {
             const slPips = slDist / pipToPrice(1, symbol);
             const pvpl = pipValuePerLot(symbol);
             const riskAmt = balance * (config.riskPercent / 100);
+            const dr = CapitalBroker.loadDealingRulesCache(symbol);
+            const brokerMax = dr ? dr.maxDealSize : 999999;
             let size = Math.max(0.01, riskAmt / (slPips * pvpl));
 
-            size = Math.min(size, config.maxLot || 5);
+            size = Math.min(size, config.maxLot || 5, brokerMax);
             if (size <= 0) {
               console.log(`[${symbol}] Calculated size is 0, skipping`);
             } else {
@@ -401,7 +403,11 @@ class Runner {
             }
 
             const pvpl = shared.pipValuePerLot(symbol);
-            const maxLot = config.dynamicMaxLot ? Math.min(config.maxLot || 5, Math.max(0.01, symState.balance / 50000)) : (config.maxLot || 5);
+            const dr = CapitalBroker.loadDealingRulesCache(symbol);
+            const brokerMax = dr ? dr.maxDealSize : 999999;
+            const maxLot = config.dynamicMaxLot
+              ? Math.min(brokerMax, config.maxLot || 5, Math.max(0.01, symState.balance / 50000))
+              : Math.min(config.maxLot || 5, brokerMax);
             const minLot = symbol.includes('XAU') ? 0.0001 : 0.01;
             let size;
             const ls = config.lossSizing;

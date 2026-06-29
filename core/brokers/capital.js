@@ -1,5 +1,7 @@
 const BaseBroker = require('./base');
 const fetch = require('node-fetch');
+const fs = require('fs');
+const path = require('path');
 
 const EPIC_MAP = {
   XAUUSD: 'GOLD',
@@ -88,7 +90,19 @@ class CapitalBroker extends BaseBroker {
       currency: data.instrument?.currency || 'USD',
     };
     this.dealingRuleCache.set(epic, rules);
+    this._saveDealingRulesCache(symbol, rules);
     return rules;
+  }
+
+  static loadDealingRulesCache(symbol) {
+    const p = path.join(__dirname, '..', '..', 'symbols', symbol, 'data', 'dealing_rules.json');
+    try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
+  }
+
+  _saveDealingRulesCache(symbol, rules) {
+    const dir = path.join(__dirname, '..', '..', 'symbols', symbol, 'data');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'dealing_rules.json'), JSON.stringify(rules, null, 2));
   }
 
   async getBalance() {

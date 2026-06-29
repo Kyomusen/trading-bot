@@ -1,5 +1,6 @@
 const shared = require('./core/strategy');
 const DataStore = require('./core/dataStore');
+const { CapitalBroker } = require('./core/brokers');
 
 const config = require('./symbols/USDJPY/config.json');
 const CANDLES = 5000;
@@ -69,7 +70,9 @@ function run(opts) {
           }
         }
         const pvpl = shared.pipValuePerLot('USDJPY');
-        const ml = cfg.dynamicMaxLot ? Math.min((cfg.maxLot||5), Math.max(0.01, balance/50000)) : (cfg.maxLot||5);
+        const dr = CapitalBroker.loadDealingRulesCache('USDJPY');
+        const brokerMax = dr ? dr.maxDealSize : 999999;
+        const ml = cfg.dynamicMaxLot ? Math.min(brokerMax, (cfg.maxLot||5), Math.max(0.01, balance/50000)) : Math.min((cfg.maxLot||5), brokerMax);
         let size; const ls = cfg.lossSizing;
         if (ls?.enabled && cl >= (ls.reduceAfter||1)) {
           const f = Math.max(ls.minFactor||0.1, (ls.reduceTo||0.65)**Math.floor(cl/(ls.reduceAfter||1))) * dm;
