@@ -1,4 +1,5 @@
 const fetch = require('node-fetch');
+const FormData = require('form-data');
 
 class DiscordNotifier {
   constructor(webhookUrl, errorWebhookUrl = null) {
@@ -22,7 +23,26 @@ class DiscordNotifier {
     }
   }
 
-  async sendLiveTrade(signal) {
+  async sendWithAttachment(embed, buffer, filename = 'chart.png') {
+    if (!this.webhookUrl) {
+      console.log('No Discord webhook configured, skipping notification');
+      return;
+    }
+    try {
+      const form = new FormData();
+      form.append('payload_json', JSON.stringify({ embeds: [embed] }));
+      form.append('file', buffer, filename);
+      await fetch(this.webhookUrl, {
+        method: 'POST',
+        body: form,
+        headers: form.getHeaders(),
+      });
+    } catch (err) {
+      console.error('Discord send with attachment failed:', err.message);
+    }
+  }
+
+  async sendLiveTrade(signal, chartBuffer = null) {
     const color = signal.signal === 'BUY' ? 0x00ff00 : signal.signal === 'SELL' ? 0xff0000 : 0x808080;
     const embed = {
       title: `📊 Live Signal: ${signal.symbol}`,
@@ -37,7 +57,12 @@ class DiscordNotifier {
       timestamp: new Date().toISOString(),
       footer: { text: 'Trading Bot' },
     };
-    await this.send(embed);
+    if (chartBuffer) {
+      embed.image = { url: 'attachment://chart.png' };
+      await this.sendWithAttachment(embed, chartBuffer);
+    } else {
+      await this.send(embed);
+    }
   }
 
   async sendBacktestReport(report) {

@@ -4,3 +4,4 @@ node_modules/
 .DS_Store
 backtests/*.json
 backtests/*.html
+logs/

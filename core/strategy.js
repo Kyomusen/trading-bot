@@ -261,17 +261,17 @@ function normalizeSignal(symbol, decision, ind) {
   };
 }
 
-async function analyzeFromData(symbol, config = {}) {
+async function analyzeFromData(symbol, config = {}, candles = null) {
   const timeframe = config.timeframe || 'H1';
   const limit = config.limit || 100;
   const tfMap = { H1: 'h1', H4: 'h4', D1: 'd1', M1: 'm1', M5: 'm5', M15: 'm15', M30: 'm30' };
 
   try {
-    const candles = await fetchCandles(symbol, tfMap[timeframe] || 'h1', limit);
-    if (!candles || candles.length < INDICATOR_OFFSET) {
+    const h1Candles = candles || (await fetchCandles(symbol, tfMap[timeframe] || 'h1', limit));
+    if (!h1Candles || h1Candles.length < INDICATOR_OFFSET) {
       return { symbol, signal: 'NONE', reason: 'Insufficient data from Dukascopy' };
     }
-    const ind = getIndicators(candles);
+    const ind = getIndicators(h1Candles);
 
     let h4Trend = 'neutral';
     try {

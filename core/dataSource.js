@@ -1,4 +1,5 @@
 const { getRealTimeRates } = require('dukascopy-node');
+const { loadCandleCache, saveCandleCache, mergeCandles } = require('./candleCache');
 
 const INSTRUMENT_MAP = {
   XAUUSD: 'xauusd',
@@ -28,4 +29,30 @@ async function fetchCandles(symbol, timeframe = 'h1', count = 100) {
   }));
 }
 
-module.exports = { fetchCandles };
+async function fetchCandlesCached(symbol, timeframe = 'H1', config = {}) {
+  const tf = timeframe.toLowerCase();
+  const dukascopyTf = { h1: 'h1', h4: 'h4', d1: 'd1', m1: 'm1', m5: 'm5', m15: 'm15', m30: 'm30' }[tf] || 'h1';
+  const fullLimit = config.limit || 100;
+  const liveFetchCount = config.liveFetchCount ?? 5;
+  const maxCache = config.maxCache || 720;
+
+  const cached = loadCandleCache(symbol, timeframe);
+
+  if (cached && cached.length >= 50) {
+    const fresh = await fetchCandles(symbol, dukascopyTf, liveFetchCount);
+    const merged = mergeCandles(cached, fresh);
+    saveCandleCache(symbol, timeframe, merged, maxCache);
+    if (merged.length < fullLimit && cached.length < fullLimit) {
+      const topUp = await fetchCandles(symbol, dukascopyTf, fullLimit);
+      saveCandleCache(symbol, timeframe, topUp, maxCache);
+      return topUp;
+    }
+    return merged;
+  }
+
+  const full = await fetchCandles(symbol, dukascopyTf, fullLimit);
+  saveCandleCache(symbol, timeframe, full, maxCache);
+  return full;
+}
+
+module.exports = { fetchCandles, fetchCandlesCached };

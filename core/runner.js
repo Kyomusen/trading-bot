@@ -4,6 +4,8 @@ const DataStore = require('./dataStore');
 const BacktestReport = require('./backtestReport');
 const DiscordNotifier = require('./discord');
 const { pipToPrice, pipValuePerLot } = require('./strategy');
+const { fetchCandlesCached, fetchCandles } = require('./dataSource');
+const { generateChart } = require('./chart');
 const fs = require('fs');
 const path = require('path');
 
@@ -22,6 +24,39 @@ if (fs.existsSync(envPath)) {
     }
   }
 }
+
+const STATE_FILE = path.join(__dirname, '..', 'logs', 'live_state.json');
+const TRADES_FILE = path.join(__dirname, '..', 'logs', 'live_trades.json');
+
+function loadState() {
+  try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf-8')); } catch { return { round: 0 }; }
+}
+function saveState(s) {
+  const dir = path.dirname(STATE_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(STATE_FILE, JSON.stringify(s, null, 2));
+}
+function loadTrades() {
+  try { return JSON.parse(fs.readFileSync(TRADES_FILE, 'utf-8')); } catch { return []; }
+}
+function saveTrades(trades) {
+  const dir = path.dirname(TRADES_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(TRADES_FILE, JSON.stringify(trades, null, 2));
+}
+
+function waitForCandleClose() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(now.getHours() + 1, 0, 0, 0);
+  const ms = next.getTime() - now.getTime() + 2000;
+  if (ms > 5000) {
+    console.log(`[Live] Waiting ${Math.round(ms / 1000)}s for candle close...`);
+    return new Promise(r => setTimeout(r, ms));
+  }
+}
+
+const DISPLAY_LIMIT = 30;
 
 class Runner {
   constructor(options = {}) {
@@ -63,12 +98,28 @@ class Runner {
   }
 
   async runLive() {
+    const state = loadState();
+    state.round = (state.round || 0) + 1;
+    saveState(state);
+    console.log(`\n🤖 Live Round #${state.round}`);
+
+    await waitForCandleClose();
+
     const results = [];
     for (const [symbol, entry] of this.brokers) {
       const { config } = entry;
       try {
         const strategy = require(`../symbols/${symbol}/strategy`);
-        const signal = await strategy.analyzeFromData(config);
+        const shared = require('./strategy');
+
+        const candles = await fetchCandlesCached(symbol, config.timeframe || 'H1', config);
+        console.log(`[${symbol}] Data: ${candles.length} candles`);
+
+        const chartCandles = candles.slice(-DISPLAY_LIMIT);
+        const ind = shared.getIndicators(candles);
+        const chartBuffer = generateChart(chartCandles, ind, null, symbol);
+
+        const signal = await strategy.analyzeFromData(config, candles);
 
         if (signal.signal !== 'NONE') {
           const brokerType = config.broker || 'capital';
@@ -78,18 +129,35 @@ class Runner {
           entry.broker = broker;
 
           const positions = await broker.getOpenPositions(symbol);
-          if (positions.length < config.maxPositions) {
+          if (positions.length < (config.maxPositions || 1)) {
             await broker.placeOrder(symbol, signal.signal, config.lotSize, signal.sl, signal.tp);
-            console.log(`Order placed for ${symbol}`);
+            console.log(`[${symbol}] Order placed: ${signal.signal}`);
+
+            const trades = loadTrades();
+            trades.push({
+              round: state.round,
+              time: new Date().toISOString(),
+              symbol,
+              action: signal.signal,
+              entry: signal.entry,
+              sl: signal.sl,
+              tp: signal.tp,
+              size: config.lotSize,
+              setup: signal.reason,
+              status: 'OPEN',
+            });
+            saveTrades(trades);
+          } else {
+            console.log(`[${symbol}] Max positions reached, skipping`);
           }
         }
 
         console.log(`${symbol}: ${signal.signal}`);
-        await this.discord.sendLiveTrade(signal);
+        await this.discord.sendLiveTrade(signal, chartBuffer);
         results.push({ symbol, signal, success: true });
       } catch (err) {
         console.error(`Error processing ${symbol}:`, err.message);
-        await this.discord.sendError(err, { symbol, mode: 'live' });
+        await this.discord.sendError(err, { symbol, mode: 'live', round: state.round });
         results.push({ symbol, error: err.message, success: false });
       }
     }
@@ -103,7 +171,6 @@ class Runner {
     let riskAmount = riskBase * (config.riskPercent / 100);
     let lots = riskAmount / (slPips * pvpl);
 
-    // Loss sizing
     const lossCfg = config.lossSizing || {};
     if (lossCfg.enabled !== false && consecutiveLosses >= (lossCfg.reduceAfter ?? 1)) {
       const factor = Math.max(
@@ -113,7 +180,6 @@ class Runner {
       lots *= factor;
     }
 
-    // Clamp
     const maxLot = config.dynamicMaxLot ? Math.max(0.01, balance / 50000) : (config.maxLot ?? 5);
     const minLot = symbol.includes('XAU') ? 0.0001 : 0.01;
     const size = Math.max(minLot, Math.min(maxLot, lots));
@@ -148,7 +214,6 @@ class Runner {
       throw new Error(`No local candle data found for ${symbol} (${config.timeframe})`);
     }
 
-    // Slice to requested candle count (matching original loadCandles behavior)
     if (config.candles && data.length > config.candles) {
       data = data.slice(-config.candles);
     }
@@ -159,7 +224,6 @@ class Runner {
     const firstValid = 49;
     const startIdx = 60;
 
-    // H4 data
     let h4Precalc = null;
     const h4Data = DataStore.loadLocalCandles(symbol, 'H4');
     if (h4Data && h4Data.length >= 20) {
@@ -210,11 +274,9 @@ class Runner {
         const ind = precalc[i - firstValid];
         let entryAllowed = true;
 
-        // Position management (always runs when position open, matching original)
         if (symState.position) {
           const pos = symState.position;
 
-          // Trailing stop
           if (config.trailing && pos.atrValue > 0) {
             if (pos.type === 'BUY') {
               if (current.high > pos.bestPrice) pos.bestPrice = current.high;
@@ -233,7 +295,6 @@ class Runner {
             }
           }
 
-          // Exit
           let exitPrice = null;
           let exitReason = '';
           if (pos.type === 'BUY') {
@@ -271,10 +332,8 @@ class Runner {
             symState.position = null;
             entryAllowed = false;
           }
-          // Skip entry when position open (matching original)
         }
 
-        // Entry (only when no position, and not after a close on same candle)
         if (!symState.position && entryAllowed) {
           const h4Trend = getH4Trend(current.time);
           const decision = shared.evaluate({ symbol, h4Trend, ind, config });
@@ -282,7 +341,6 @@ class Runner {
             const { action, slPips, tpPips } = decision;
             const atrVal = ind.atr || 0;
 
-            // Adaptive multiplier (matching original calcAdaptiveMultiplier)
             const adCfg = config.adaptiveSizing;
             let dirMul = 1;
             if (adCfg?.enabled) {
@@ -298,7 +356,6 @@ class Runner {
               }
             }
 
-            // Size calculation (matching original calcSize)
             const pvpl = shared.pipValuePerLot(symbol);
             const maxLot = config.dynamicMaxLot ? Math.max(0.01, symState.balance / 50000) : (config.maxLot || 5);
             const minLot = symbol.includes('XAU') ? 0.0001 : 0.01;
@@ -348,7 +405,6 @@ class Runner {
           }
         }
 
-        // Equity curve
         let equity = symState.balance;
         if (symState.position) {
           const multiplier = symState.position.type === 'BUY' ? 1 : -1;
