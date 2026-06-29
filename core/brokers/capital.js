@@ -20,6 +20,7 @@ class CapitalBroker extends BaseBroker {
     this.cst = null;
     this.securityToken = null;
     this.accountId = null;
+    this.dealingRuleCache = new Map();
   }
 
   async connect() {
@@ -72,6 +73,35 @@ class CapitalBroker extends BaseBroker {
     };
   }
 
+  async getDealingRules(symbol) {
+    const epic = resolveEpic(symbol);
+    if (this.dealingRuleCache.has(epic)) return this.dealingRuleCache.get(epic);
+    const res = await fetch(`${this.baseUrl}/api/v1/markets/${epic}`, {
+      headers: this._authHeaders(),
+    });
+    if (!res.ok) throw new Error(`Failed to get market info for ${epic}: ${res.status}`);
+    const data = await res.json();
+    const rules = {
+      minDealSize: data.dealingRules?.minDealSize?.value ?? 0.01,
+      maxDealSize: data.dealingRules?.maxDealSize?.value ?? 999999,
+      lotSize: data.instrument?.lotSize ?? 1,
+      currency: data.instrument?.currency || 'USD',
+    };
+    this.dealingRuleCache.set(epic, rules);
+    return rules;
+  }
+
+  async getBalance() {
+    const res = await fetch(`${this.baseUrl}/api/v1/accounts`, {
+      headers: this._authHeaders(),
+    });
+    if (!res.ok) throw new Error(`Failed to get accounts: ${res.status}`);
+    const data = await res.json();
+    const acc = data.accounts?.[0];
+    if (!acc) throw new Error('No account found');
+    return parseFloat(acc.balance?.available ?? acc.balance ?? 0);
+  }
+
   async getCandles(symbol, timeframe, limit = 100) {
     const epic = resolveEpic(symbol);
     const resolution = this._mapTimeframe(timeframe);
@@ -107,13 +137,13 @@ class CapitalBroker extends BaseBroker {
     return map[tf] || 'HOUR';
   }
 
-  async placeOrder(symbol, type, lotSize, sl, tp, comment = '') {
+  async placeOrder(symbol, type, size, sl, tp, comment = '') {
     const epic = resolveEpic(symbol);
     const direction = type === 'BUY' ? 'BUY' : 'SELL';
     const body = {
       epic,
       direction,
-      size: lotSize,
+      size,
       orderType: 'MARKET',
       currencyCode: 'USD',
       guaranteedStop: false,
@@ -134,6 +164,21 @@ class CapitalBroker extends BaseBroker {
     }
 
     return res.json();
+  }
+
+  async validateSize(symbol, size) {
+    const epic = resolveEpic(symbol);
+    let rules;
+    try {
+      rules = await this.getDealingRules(symbol);
+    } catch {
+      return { valid: true, size, min: 0, max: 999999 };
+    }
+    const min = rules.minDealSize;
+    const max = rules.maxDealSize;
+    if (size < min) return { valid: false, size: min, min, max, reason: `Size ${size} < min ${min}` };
+    if (size > max) return { valid: false, size: max, min, max, reason: `Size ${size} > max ${max}` };
+    return { valid: true, size: Math.round(size * 100) / 100, min, max };
   }
 
   async getOpenPositions(symbol) {

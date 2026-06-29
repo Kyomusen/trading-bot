@@ -131,26 +131,58 @@ class Runner {
           entry.broker = broker;
 
           const positions = await broker.getOpenPositions(symbol);
-          if (positions.length < (config.maxPositions || 1)) {
-            await broker.placeOrder(symbol, signal.signal, config.lotSize, signal.sl, signal.tp);
-            console.log(`[${symbol}] Order placed: ${signal.signal}`);
-
-            const trades = loadTrades();
-            trades.push({
-              round: state.round,
-              time: new Date().toISOString(),
-              symbol,
-              action: signal.signal,
-              entry: signal.entry,
-              sl: signal.sl,
-              tp: signal.tp,
-              size: config.lotSize,
-              setup: signal.reason,
-              status: 'OPEN',
-            });
-            saveTrades(trades);
-          } else {
+          if (positions.length >= (config.maxPositions || 1)) {
             console.log(`[${symbol}] Max positions reached, skipping`);
+          } else {
+            const balance = await broker.getBalance();
+            const slDist = Math.abs(signal.entry - signal.sl);
+            const slPips = slDist / pipToPrice(1, symbol);
+            const pvpl = pipValuePerLot(symbol);
+            const riskAmt = balance * (config.riskPercent / 100);
+            let size = Math.max(0.01, riskAmt / (slPips * pvpl));
+
+            size = Math.min(size, config.maxLot || 5);
+            if (size <= 0) {
+              console.log(`[${symbol}] Calculated size is 0, skipping`);
+            } else {
+              const validation = await broker.validateSize(symbol, size);
+              let finalSize = validation.valid ? validation.size : 0;
+
+              if (!validation.valid && size < validation.min) {
+                const minRiskPct = (validation.min * slPips * pvpl) / balance * 100;
+                if (minRiskPct <= (config.riskPercent || 1) * 3) {
+                  finalSize = validation.min;
+                  console.log(`[${symbol}] Size ${size.toFixed(4)} < min ${validation.min}, using min (risk ${minRiskPct.toFixed(1)}%)`);
+                } else {
+                  console.log(`[${symbol}] Cannot trade: min size ${validation.min} would risk ${minRiskPct.toFixed(1)}% (limit: ${(config.riskPercent || 1) * 3}%)`);
+                  signal.signal = 'NONE';
+                  signal.reason = `Size too large: min ${validation.min} would risk ${minRiskPct.toFixed(0)}%`;
+                }
+              } else if (!validation.valid && size > validation.max) {
+                finalSize = validation.max;
+                console.log(`[${symbol}] Size ${size.toFixed(4)} > max ${validation.max}, capping`);
+              }
+
+              if (finalSize > 0) {
+                await broker.placeOrder(symbol, signal.signal, finalSize, signal.sl, signal.tp);
+                console.log(`[${symbol}] Order placed: ${signal.signal} size=${finalSize}`);
+
+                const trades = loadTrades();
+                trades.push({
+                  round: state.round,
+                  time: new Date().toISOString(),
+                  symbol,
+                  action: signal.signal,
+                  entry: signal.entry,
+                  sl: signal.sl,
+                  tp: signal.tp,
+                  size: finalSize,
+                  setup: signal.reason,
+                  status: 'OPEN',
+                });
+                saveTrades(trades);
+              }
+            }
           }
         }
 
