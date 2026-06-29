@@ -44,7 +44,7 @@ jobs:
       - run: npm ci
 
       - name: Run backtest
-        run: node core/runner.js backtest ${{ matrix.symbol }}
+        run: node --no-warnings core/runner.js backtest ${{ matrix.symbol }}
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_ERROR_WEBHOOK_URL: ${{ secrets.DISCORD_ERROR_WEBHOOK_URL }}

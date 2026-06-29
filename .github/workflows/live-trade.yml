@@ -25,7 +25,7 @@ jobs:
       - run: npm ci
 
       - name: Run live trading
-        run: node core/runner.js live ${{ github.event.inputs.symbol }}
+        run: node --no-warnings core/runner.js live ${{ github.event.inputs.symbol }}
         env:
           CAPITAL_API_KEY: ${{ secrets.CAPITAL_API_KEY }}
           CAPITAL_EMAIL: ${{ secrets.CAPITAL_EMAIL }}
