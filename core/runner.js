@@ -149,6 +149,7 @@ class Runner {
                 await broker.placeOrder(symbol, signal.signal, finalSize, signal.sl, signal.tp);
                 console.log(`[${symbol}] Order placed: ${signal.signal} size=${finalSize}`);
                 positionData = { entryPrice: signal.entry, stopLoss: signal.sl, takeProfit: signal.tp };
+                signal.lotSize = finalSize;
 
                 const trades = loadTrades();
                 trades.push({
@@ -171,7 +172,7 @@ class Runner {
 
         const chartCandles = candles.slice(-DISPLAY_LIMIT);
         const ind = shared.getIndicators(candles);
-        const chartBuffer = generateChart(chartCandles, ind, positionData, symbol, 600, 300, candles.map(c => c.close));
+        const chartBuffer = generateChart(chartCandles, ind, positionData, symbol, config.timeframe || 'H1', 600, 300, candles.map(c => c.close));
 
         console.log(`${symbol}: ${signal.signal}`);
         await this.discord.sendLiveTrade(signal, chartBuffer);
@@ -454,7 +455,10 @@ class Runner {
     const htmlPath = jsonPath.replace('.json', '.html');
     fs.writeFileSync(htmlPath, html);
 
-    this.discord.sendBacktestReport({ ...report, artifactUrl: `artifact://${path.basename(htmlPath)}` });
+    const ghUrl = process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
+      ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+      : null;
+    this.discord.sendBacktestReport({ ...report, artifactUrl: ghUrl || `artifact://${path.basename(htmlPath)}` });
 
     return { report, jsonPath, htmlPath };
   }

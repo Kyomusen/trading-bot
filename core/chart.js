@@ -125,7 +125,7 @@ function calcEMA(values, period) {
   return result;
 }
 
-function generateChart(candles, ind, position = null, symbol = 'XAUUSD', width = 600, height = 300, fullCloses = null) {
+function generateChart(candles, ind, position = null, symbol = 'XAUUSD', timeframe = 'H1', width = 600, height = 300, fullCloses = null) {
   const px = new Uint8Array(width * height * 4);
 
   const BG      = [18,  18,  36,  255];
@@ -239,6 +239,7 @@ function generateChart(candles, ind, position = null, symbol = 'XAUUSD', width =
   if (position) {
     const lines = [
       { price: position.entryPrice, col: ENTRY_C, label: 'EN' },
+      { price: position.stopLoss,   col: SL_C,    label: 'SL' },
     ].filter(l => l.price != null);
 
     for (const { price, col, label } of lines) {
@@ -253,7 +254,7 @@ function generateChart(candles, ind, position = null, symbol = 'XAUUSD', width =
   hLine(px, width, padL - 1, padL + plotW, padT + plotH + 1, AXIS);
 
   const lastClose = valid[valid.length - 1].c.toFixed(symbol.includes('JPY') ? 3 : 2);
-  drawText(px, width, padL + 4, 8, `${symbol} H1  ${lastClose}`, HDR);
+  drawText(px, width, padL + 4, 8, `${symbol} ${timeframe}  ${lastClose}`, HDR);
 
   const step = Math.max(1, Math.floor(valid.length / 5));
   for (let vi = 0; vi < valid.length; vi += step) {

@@ -50,6 +50,10 @@ class DiscordNotifier {
       fields: [
         { name: 'Signal', value: signal.signal, inline: true },
         { name: 'Entry', value: signal.entry?.toString() ?? '-', inline: true },
+        { name: 'SL', value: signal.sl?.toString() ?? '-', inline: true },
+        { name: 'Lot Size', value: signal.lotSize?.toString() ?? '-', inline: true },
+        { name: 'RSI', value: signal.indicators?.rsi?.toFixed(1) ?? '-', inline: true },
+        { name: 'ATR', value: signal.indicators?.atr?.toFixed(2) ?? '-', inline: true },
         { name: 'Reason', value: signal.reason ?? '-', inline: false },
       ],
       timestamp: new Date().toISOString(),
