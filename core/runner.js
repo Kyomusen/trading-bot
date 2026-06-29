@@ -467,22 +467,22 @@ class Runner {
     }
 
     const allTrades = allSegmentTrades;
-    const report = new BacktestReport(allTrades).generate();
+    const btReport = new BacktestReport(allTrades);
+    const report = btReport.generate();
     report.startBalance = balancePerSymbol;
     report.finalBalance = balancePerSymbol + allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
     report.returnPct = ((report.finalBalance - report.startBalance) / report.startBalance) * 100;
     report.maxDD = globalMaxDD;
     report.maxDd = globalMaxDD;
 
-    const html = new BacktestReport(allTrades).toHTML();
+    const summary = btReport.toSummary();
+    console.log(summary);
     const jsonPath = this.dataStore.saveBacktestResult(symbol, report);
-    const htmlPath = jsonPath.replace('.json', '.html');
-    fs.writeFileSync(htmlPath, html);
 
     const ghUrl = process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
       ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
       : null;
-    this.discord.sendBacktestReport({ ...report, artifactUrl: ghUrl || `artifact://${path.basename(htmlPath)}` });
+    this.discord.sendBacktestReport({ ...report, summary, artifactUrl: ghUrl });
 
     return { report, jsonPath, htmlPath };
   }

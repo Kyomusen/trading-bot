@@ -72,21 +72,30 @@ class DiscordNotifier {
 
   async sendBacktestReport(report) {
     const emoji = report.netProfit >= 0 ? '📈' : '📉';
+    const desc = `**Net**: $${this._fmt(report.netProfit)}  **WR**: ${report.winRate.toFixed(1)}%  **PF**: ${report.profitFactor.toFixed(2)}  **DD**: ${report.maxDrawdown.toFixed(1)}%  **Trades**: ${report.totalTrades}`;
     const embed = {
-      title: `${emoji} Backtest Results: ${report.symbol}`,
+      title: `${emoji} Backtest: ${report.symbol}`,
       color: 0x0099ff,
-      description: `**Net Profit**: ${report.netProfit.toFixed(2)}　**Return**: ${report.returnPct.toFixed(2)}%　**Win Rate**: ${report.winRate.toFixed(2)}%`,
-      fields: [
-        { name: '💰 Performance', value: `Profit Factor: ${report.profitFactor.toFixed(2)} | Max Drawdown: ${report.maxDrawdown.toFixed(2)}%`, inline: true },
-        { name: '🔄 Statistics', value: `Total Trades: ${report.totalTrades}`, inline: true },
-      ],
+      description: desc,
       timestamp: new Date().toISOString(),
       footer: { text: 'Backtest Report' },
     };
+    if (report.summary) {
+      const yearlySection = report.summary.split('--- Yearly Breakdown ---')[1]?.trim();
+      if (yearlySection) {
+        embed.fields.push({ name: '📅 Yearly Breakdown', value: '```\n' + yearlySection.slice(0, 1000) + '\n```', inline: false });
+      }
+    }
     if (report.artifactUrl) {
-      embed.fields.push({ name: '🔗 Artifact', value: `[View Detailed Report](${report.artifactUrl})`, inline: false });
+      embed.fields.push({ name: '🔗 Artifact', value: `[View Report](${report.artifactUrl})`, inline: false });
     }
     await this.send(embed);
+  }
+
+  _fmt(n) {
+    if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return n.toFixed(0);
   }
 
   async sendError(error, context = {}) {

@@ -18,6 +18,7 @@ class BacktestReport {
     let losses = 0;
 
     const equityCurve = [balance];
+    const yearlyMap = {};
 
     for (const trade of this.trades) {
       const pnl = trade.pnl || 0;
@@ -35,6 +36,14 @@ class BacktestReport {
         grossLoss += Math.abs(pnl);
         losses++;
       }
+
+      const year = new Date(trade.exitTime || trade.entryTime).getFullYear();
+      if (!isNaN(year)) {
+        if (!yearlyMap[year]) yearlyMap[year] = { trades: [], wins: 0, losses: 0, grossProfit: 0, grossLoss: 0 };
+        yearlyMap[year].trades.push(trade);
+        if (pnl > 0) { yearlyMap[year].wins++; yearlyMap[year].grossProfit += pnl; }
+        else { yearlyMap[year].losses++; yearlyMap[year].grossLoss += Math.abs(pnl); }
+      }
     }
 
     const totalTrades = wins + losses;
@@ -43,10 +52,28 @@ class BacktestReport {
     const netProfit = balance - this.initialBalance;
     const returnPct = (netProfit / this.initialBalance) * 100;
 
+    const yearlyBreakdown = Object.entries(yearlyMap)
+      .sort(([a], [b]) => a - b)
+      .map(([year, d]) => {
+        const t = d.trades.length;
+        const wr = t > 0 ? (d.wins / t) * 100 : 0;
+        const pf = d.grossLoss > 0 ? d.grossProfit / d.grossLoss : d.grossProfit > 0 ? 999 : 0;
+        const net = d.grossProfit - d.grossLoss;
+        return {
+          year: parseInt(year),
+          trades: t,
+          wins: d.wins,
+          losses: d.losses,
+          winRate: parseFloat(wr.toFixed(1)),
+          profitFactor: parseFloat(pf.toFixed(2)),
+          netProfit: parseFloat(net.toFixed(2)),
+        };
+      });
+
     return {
       symbol: this.trades[0]?.symbol || 'UNKNOWN',
       initialBalance: this.initialBalance,
-      finalBalance: balance,
+      finalBalance: parseFloat(balance.toFixed(2)),
       netProfit: parseFloat(netProfit.toFixed(2)),
       returnPct: parseFloat(returnPct.toFixed(2)),
       totalTrades,
@@ -59,6 +86,7 @@ class BacktestReport {
       maxDrawdown: parseFloat(maxDrawdown.toFixed(2)),
       equityCurve,
       trades: this.trades,
+      yearlyBreakdown,
     };
   }
 
@@ -79,53 +107,31 @@ class BacktestReport {
       maxDrawdown: 0,
       equityCurve: [this.initialBalance],
       trades: [],
+      yearlyBreakdown: [],
     };
   }
 
-  toHTML() {
+  toSummary() {
     const r = this.generate();
-    return `
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Backtest Report - ${r.symbol}</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    .metric { display: inline-block; padding: 10px 20px; margin: 5px; background: #f5f5f5; border-radius: 4px; }
-    .metric.green { background: #d4edda; color: #155724; }
-    .metric.red { background: #f8d7da; color: #721c24; }
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
-    th { background: #343a40; color: white; }
-  </style>
-</head>
-<body>
-  <h1>Backtest Report: ${r.symbol}</h1>
-  <div>
-    <span class="metric ${r.returnPct >= 0 ? 'green' : 'red'}">Return: ${r.returnPct}%</span>
-    <span class="metric">Win Rate: ${r.winRate}%</span>
-    <span class="metric">Profit Factor: ${r.profitFactor}</span>
-    <span class="metric ${r.maxDrawdown > 10 ? 'red' : ''}">Max DD: ${r.maxDrawdown}%</span>
-    <span class="metric">Trades: ${r.totalTrades}</span>
-    <span class="metric ${r.netProfit >= 0 ? 'green' : 'red'}">Net Profit: ${r.netProfit}</span>
-  </div>
-  <h2>Trade History</h2>
-  <table>
-    <tr><th>Time</th><th>Type</th><th>Entry</th><th>Exit</th><th>SL</th><th>PnL</th></tr>
-    ${r.trades.map(t => `
-      <tr>
-        <td>${t.exitTime || t.entryTime}</td>
-        <td>${t.type}</td>
-        <td>${t.entry}</td>
-        <td>${t.exit}</td>
-        <td>${t.sl}</td>
-        <td class="${t.pnl >= 0 ? 'green' : 'red'}">${t.pnl}</td>
-      </tr>
-    `).join('')}
-  </table>
-</body>
-</html>
-    `.trim();
+    let s = `=== Backtest: ${r.symbol} ===\n`;
+    s += `Initial: $${r.initialBalance}  Final: $${r.finalBalance}  Net: $${r.netProfit} (${r.returnPct}%)\n`;
+    s += `Trades: ${r.totalTrades}  WR: ${r.winRate}%  PF: ${r.profitFactor}  DD: ${r.maxDrawdown}%\n`;
+
+    if (r.yearlyBreakdown && r.yearlyBreakdown.length > 0) {
+      s += `\n--- Yearly Breakdown ---\n`;
+      s += `Year     Trades  WR%    PF     Net($)   \n`;
+      s += `──${'─'.repeat(45)}\n`;
+      for (const y of r.yearlyBreakdown) {
+        s += `${y.year}  ${String(y.trades).padStart(6)}  ${y.winRate.toFixed(1).padStart(5)}%  ${y.profitFactor.toFixed(2).padStart(5)}  ${this._fmt(y.netProfit)}\n`;
+      }
+    }
+    return s;
+  }
+
+  _fmt(n) {
+    if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return n.toFixed(0);
   }
 }
 
