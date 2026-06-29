@@ -141,7 +141,6 @@ function generateChart(candles, ind, position = null, symbol = 'XAUUSD', timefra
   const DIM     = [110, 110, 135, 255];
   const ENTRY_C = [255, 191,   0, 230];
   const SL_C    = [255,  65,  65, 230];
-  const TP_C    = [ 50, 220,  95, 230];
 
   for (let i = 0; i < px.length; i += 4) {
     px[i] = BG[0]; px[i+1] = BG[1]; px[i+2] = BG[2]; px[i+3] = BG[3];
@@ -176,7 +175,6 @@ function generateChart(candles, ind, position = null, symbol = 'XAUUSD', timefra
   const prices = [...valid.map(v => v.h), ...valid.map(v => v.l)];
   if (position?.entryPrice) prices.push(position.entryPrice);
   if (position?.stopLoss)   prices.push(position.stopLoss);
-  if (position?.takeProfit) prices.push(position.takeProfit);
   const maxP  = Math.max(...prices);
   const minP  = Math.min(...prices);
   const pPad  = (maxP - minP) * 0.08 || 1;
@@ -240,7 +238,6 @@ function generateChart(candles, ind, position = null, symbol = 'XAUUSD', timefra
     const lines = [
       { price: position.entryPrice, col: ENTRY_C, label: 'EN' },
       { price: position.stopLoss,   col: SL_C,    label: 'SL' },
-      { price: position.takeProfit, col: TP_C,    label: 'TP' },
     ].filter(l => l.price != null);
 
     for (const { price, col, label } of lines) {

@@ -111,7 +111,7 @@ class BacktestReport {
   </div>
   <h2>Trade History</h2>
   <table>
-    <tr><th>Time</th><th>Type</th><th>Entry</th><th>Exit</th><th>SL</th><th>TP</th><th>PnL</th></tr>
+    <tr><th>Time</th><th>Type</th><th>Entry</th><th>Exit</th><th>SL</th><th>PnL</th></tr>
     ${r.trades.map(t => `
       <tr>
         <td>${t.exitTime || t.entryTime}</td>
@@ -119,7 +119,6 @@ class BacktestReport {
         <td>${t.entry}</td>
         <td>${t.exit}</td>
         <td>${t.sl}</td>
-        <td>${t.tp}</td>
         <td class="${t.pnl >= 0 ? 'green' : 'red'}">${t.pnl}</td>
       </tr>
     `).join('')}

@@ -16,7 +16,7 @@ class BaseBroker {
     throw new Error('getCandles() must be implemented by subclass');
   }
 
-  async placeOrder(symbol, type, lotSize, sl, tp, comment = '') {
+  async placeOrder(symbol, type, lotSize, sl, tp, comment = '', trailingOptions = null) {
     throw new Error('placeOrder() must be implemented by subclass');
   }
 

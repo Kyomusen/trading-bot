@@ -153,9 +153,14 @@ class Runner {
               }
 
               if (finalSize > 0) {
-                await broker.placeOrder(symbol, signal.signal, finalSize, signal.sl, signal.tp);
+                let trailingOptions = null;
+                if (config.trailing && signal.indicators?.atr) {
+                  const dist = (config.trailingDistance ?? 0.1) * signal.indicators.atr;
+                  trailingOptions = { enabled: true, distance: parseFloat(dist.toFixed(5)) };
+                }
+                await broker.placeOrder(symbol, signal.signal, finalSize, signal.sl, null, '', trailingOptions);
                 console.log(`[${symbol}] Order placed: ${signal.signal} size=${finalSize}`);
-                positionData = { entryPrice: signal.entry, stopLoss: signal.sl, takeProfit: signal.tp };
+                positionData = { entryPrice: signal.entry, stopLoss: signal.sl };
                 signal.lotSize = finalSize;
 
                 const trades = loadTrades();
@@ -166,7 +171,6 @@ class Runner {
                   action: signal.signal,
                   entry: signal.entry,
                   sl: signal.sl,
-                  tp: signal.tp,
                   size: finalSize,
                   setup: signal.reason,
                   status: 'OPEN',
@@ -315,18 +319,27 @@ class Runner {
           const pos = symState.position;
 
           if (config.trailing && pos.atrValue > 0) {
+            const baseActivate = config.trailingActivate ?? 0.2;
+            const baseDist = config.trailingDistance ?? 0.1;
+            const maxDist = config.trailingDistanceMax ?? 0.5;
+            const progFactor = config.trailingProgressive ?? 0.01;
+
             if (pos.type === 'BUY') {
               if (current.high > pos.bestPrice) pos.bestPrice = current.high;
-              const profit = pos.bestPrice - pos.entry;
-              if (profit >= (config.trailingActivate || 0.5) * pos.atrValue) {
-                const newSl = Math.max(pos.sl, pos.bestPrice - (config.trailingDistance || 0.2) * pos.atrValue);
+              const profitPct = (pos.bestPrice - pos.entry) / pos.atrValue;
+              if (profitPct >= baseActivate) {
+                const trailDist = Math.min(maxDist, Math.max(0.02, baseDist + (profitPct - baseActivate) * progFactor));
+                const lockSl = pos.entry + 0.05 * pos.atrValue;
+                const newSl = Math.max(pos.sl, pos.bestPrice - trailDist * pos.atrValue, lockSl);
                 if (newSl > pos.sl) { pos.sl = newSl; pos.trailingActivated = true; }
               }
             } else {
               if (current.low < pos.bestPrice) pos.bestPrice = current.low;
-              const profit = pos.entry - pos.bestPrice;
-              if (profit >= (config.trailingActivate || 0.5) * pos.atrValue) {
-                const newSl = Math.min(pos.sl, pos.bestPrice + (config.trailingDistance || 0.2) * pos.atrValue);
+              const profitPct = (pos.entry - pos.bestPrice) / pos.atrValue;
+              if (profitPct >= baseActivate) {
+                const trailDist = Math.min(maxDist, Math.max(0.02, baseDist + (profitPct - baseActivate) * progFactor));
+                const lockSl = pos.entry - 0.05 * pos.atrValue;
+                const newSl = Math.min(pos.sl, pos.bestPrice + trailDist * pos.atrValue, lockSl);
                 if (newSl < pos.sl) { pos.sl = newSl; pos.trailingActivated = true; }
               }
             }
@@ -334,13 +347,8 @@ class Runner {
 
           let exitPrice = null;
           let exitReason = '';
-          if (pos.type === 'BUY') {
-            if (current.low <= pos.sl) { exitPrice = pos.sl; exitReason = 'SL'; }
-            else if (current.high >= pos.tp) { exitPrice = pos.tp; exitReason = 'TP'; }
-          } else {
-            if (current.high >= pos.sl) { exitPrice = pos.sl; exitReason = 'SL'; }
-            else if (current.low <= pos.tp) { exitPrice = pos.tp; exitReason = 'TP'; }
-          }
+          if (current.low <= pos.sl && pos.type === 'BUY') { exitPrice = pos.sl; exitReason = 'SL'; }
+          else if (current.high >= pos.sl && pos.type === 'SELL') { exitPrice = pos.sl; exitReason = 'SL'; }
 
           if (exitPrice) {
             const multiplier = pos.type === 'BUY' ? 1 : -1;
@@ -359,7 +367,6 @@ class Runner {
               entry: pos.entry,
               exit: exitPrice,
               sl: pos.sl,
-              tp: pos.tp,
               entryTime: pos.entryTime,
               exitTime: current.time,
               pnl: parseFloat(pnl.toFixed(2)),
@@ -375,7 +382,7 @@ class Runner {
           const h4Trend = getH4Trend(current.time);
           const decision = shared.evaluate({ symbol, h4Trend, ind, config });
           if (decision) {
-            const { action, slPips, tpPips } = decision;
+            const { action, slPips } = decision;
             const atrVal = ind.atr || 0;
 
             const adCfg = config.adaptiveSizing;
@@ -423,15 +430,11 @@ class Runner {
               const slPrice = action === 'BUY'
                 ? entryPrice - slPips * shared.pipToPrice(1, symbol)
                 : entryPrice + slPips * shared.pipToPrice(1, symbol);
-              const tpPrice = action === 'BUY'
-                ? entryPrice + tpPips * shared.pipToPrice(1, symbol)
-                : entryPrice - tpPips * shared.pipToPrice(1, symbol);
 
               symState.position = {
                 type: action,
                 entry: entryPrice,
                 sl: slPrice,
-                tp: tpPrice,
                 entryTime: current.time,
                 bestPrice: entryPrice,
                 atrValue: atrVal,

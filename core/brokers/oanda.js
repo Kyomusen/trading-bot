@@ -42,7 +42,7 @@ class OandaBroker extends BaseBroker {
     return map[tf] || 'H1';
   }
 
-  async placeOrder(symbol, type, lotSize, sl, tp, comment = '') {
+  async placeOrder(symbol, type, lotSize, sl, comment = '') {
     const units = type === 'BUY' ? lotSize * 100000 : -lotSize * 100000;
     const body = {
       order: {
@@ -52,7 +52,6 @@ class OandaBroker extends BaseBroker {
         timeInForce: 'FOK',
         positionFill: 'DEFAULT',
         ...(sl && { stopLossOnFill: { price: sl.toString() } }),
-        ...(tp && { takeProfitOnFill: { price: tp.toString() } }),
         clientExtensions: { comment },
       },
     };
@@ -80,7 +79,6 @@ class OandaBroker extends BaseBroker {
         size: parseFloat(p.long?.units || p.short?.units) / 100000,
         entryPrice: parseFloat(p.long?.averagePrice || p.short?.averagePrice),
         sl: parseFloat(p.long?.stopLossOrder?.price || p.short?.stopLossOrder?.price || 0),
-        tp: parseFloat(p.long?.takeProfitOrder?.price || p.short?.takeProfitOrder?.price || 0),
       }));
   }
 

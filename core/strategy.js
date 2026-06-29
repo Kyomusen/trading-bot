@@ -1,8 +1,8 @@
 const { RSI, EMA, MACD, ATR } = require('technicalindicators');
 
 const SYMBOL_STRATEGY = {
-  XAUUSD: { allowedSetups: ['trend_buy', 'trend_sell'], rsi: { trend_buy: { min: 30, max: 50 }, trend_sell: { min: 50, max: 70 }, momentum_sell: { min: 28, max: 48 }, momentum_buy: { min: 48, max: 62 }, pullback_sell: { min: 55, max: 75 }, pullback_buy: { min: 30, max: 50 } }, trendRequired: false, requireH1Trend: false, requireBelowEma50: false, atrSlM: 1.0, atrTpM: 5.0, minSl: 10, minTp: 25 },
-  USDJPY: { allowedSetups: ['trend_buy', 'trend_sell'], rsi: { trend_buy: { min: 25, max: 60 }, trend_sell: { min: 40, max: 75 } }, trendRequired: false, requireH1Trend: false, requireBelowEma50: false, atrSlM: 1.5, atrTpM: 3.0, minSl: 8, minTp: 20 },
+  XAUUSD: { allowedSetups: ['trend_buy', 'trend_sell'], rsi: { trend_buy: { min: 30, max: 50 }, trend_sell: { min: 50, max: 70 }, momentum_sell: { min: 28, max: 48 }, momentum_buy: { min: 48, max: 62 }, pullback_sell: { min: 55, max: 75 }, pullback_buy: { min: 30, max: 50 } }, trendRequired: false, requireH1Trend: false, requireBelowEma50: false, atrSlM: 1.0, minSl: 10 },
+  USDJPY: { allowedSetups: ['trend_buy', 'trend_sell'], rsi: { trend_buy: { min: 25, max: 60 }, trend_sell: { min: 40, max: 75 } }, trendRequired: false, requireH1Trend: false, requireBelowEma50: false, atrSlM: 1.5, minSl: 8 },
 };
 
 function getPrice(c) { return c.close; }
@@ -99,15 +99,13 @@ function getIndicators(candles) {
   };
 }
 
-function atrParams(atr, symbol, config = {}) {
+function slParams(atr, symbol, config = {}) {
   const cfg = SYMBOL_STRATEGY[symbol];
   const slM = config.atrSl || (cfg?.atrSlM ?? 2);
-  const tpM = config.atrTp || (cfg?.atrTpM ?? 6);
-  if (!atr || atr <= 0) return { slPips: cfg?.minSl ?? 15, tpPips: cfg?.minTp ?? 30 };
+  if (!atr || atr <= 0) return { slPips: cfg?.minSl ?? 15 };
   const pips = Math.round(atr / pipToPrice(1, symbol));
   return {
     slPips: Math.max(cfg?.minSl ?? 18, Math.round(pips * slM)),
-    tpPips: Math.max(cfg?.minTp ?? 45, Math.round(pips * tpM)),
   };
 }
 
@@ -120,10 +118,8 @@ function evaluate(params) {
   if (config.allowedSetups) cfg.allowedSetups = config.allowedSetups;
   if (config.rsi) cfg.rsi = config.rsi;
   if (config.atrSlM != null) cfg.atrSlM = config.atrSlM;
-  if (config.atrTpM != null) cfg.atrTpM = config.atrTpM;
   if (config.minSl != null) cfg.minSl = config.minSl;
-  if (config.minTp != null) cfg.minTp = config.minTp;
-  const { slPips, tpPips } = atrParams(atr, symbol, config);
+  const { slPips } = slParams(atr, symbol, config);
   const aboveEma50 = currentPrice && ema50 ? currentPrice > ema50 : false;
   const belowEma50 = currentPrice && ema50 ? currentPrice < ema50 : false;
   const aboveEma20 = currentPrice && ema20 ? currentPrice > ema20 : false;
@@ -146,33 +142,34 @@ function evaluate(params) {
   for (const setup of cfg.allowedSetups) {
     const rsiRange = cfg.rsi[setup];
     if (!rsiRange) continue;
+
     if (setup === 'trend_sell' && downtrend && nearResistance)
-      candidates.push({ action: 'SELL', setup, confidence: 0.8, slPips, tpPips });
+      candidates.push({ action: 'SELL', setup, confidence: 0.8, slPips });
     if (setup === 'trend_buy' && uptrend && nearSupport)
-      candidates.push({ action: 'BUY', setup, confidence: 0.8, slPips, tpPips });
+      candidates.push({ action: 'BUY', setup, confidence: 0.8, slPips });
     if (setup === 'momentum_sell' && downtrend && macdNegative) {
       let ok = rsi >= rsiRange.min && rsi <= rsiRange.max && macdCrossoverBear && belowEma20;
       if (cfg.requireH1Trend && h1Trend !== 'bearish') ok = false;
       if (cfg.requireBelowEma50 && !belowEma50) ok = false;
-      if (ok) candidates.push({ action: 'SELL', setup, confidence: 0.7, slPips, tpPips });
+      if (ok) candidates.push({ action: 'SELL', setup, confidence: 0.7, slPips });
     }
     if (setup === 'momentum_buy' && uptrend && macdPositive) {
       let ok = rsi >= rsiRange.min && rsi <= rsiRange.max && macdCrossoverBull && aboveEma20;
       if (cfg.requireH1Trend && h1Trend !== 'bullish') ok = false;
       if (cfg.requireBelowEma50 && !aboveEma50) ok = false;
-      if (ok) candidates.push({ action: 'BUY', setup, confidence: 0.7, slPips, tpPips });
+      if (ok) candidates.push({ action: 'BUY', setup, confidence: 0.7, slPips });
     }
     if (setup === 'pullback_sell' && downtrend && macdNegative) {
       let ok = rsi >= rsiRange.min && rsi <= rsiRange.max && macdCrossoverBear && aboveEma20;
       if (cfg.requireH1Trend && h1Trend !== 'bearish') ok = false;
       if (cfg.requireBelowEma50 && !belowEma50) ok = false;
-      if (ok) candidates.push({ action: 'SELL', setup, confidence: 0.8, slPips, tpPips });
+      if (ok) candidates.push({ action: 'SELL', setup, confidence: 0.8, slPips });
     }
     if (setup === 'pullback_buy' && uptrend && macdPositive) {
       let ok = rsi >= rsiRange.min && rsi <= rsiRange.max && macdCrossoverBull && belowEma20;
       if (cfg.requireH1Trend && h1Trend !== 'bullish') ok = false;
       if (cfg.requireBelowEma50 && !aboveEma50) ok = false;
-      if (ok) candidates.push({ action: 'BUY', setup, confidence: 0.8, slPips, tpPips });
+      if (ok) candidates.push({ action: 'BUY', setup, confidence: 0.8, slPips });
     }
   }
   if (candidates.length === 0) return null;
@@ -246,15 +243,11 @@ function normalizeSignal(symbol, decision, ind) {
   const slPrice = decision.action === 'BUY'
     ? entryPrice - decision.slPips * pipToPrice(1, symbol)
     : entryPrice + decision.slPips * pipToPrice(1, symbol);
-  const tpPrice = decision.action === 'BUY'
-    ? entryPrice + decision.tpPips * pipToPrice(1, symbol)
-    : entryPrice - decision.tpPips * pipToPrice(1, symbol);
   return {
     symbol,
     signal: decision.action,
     entry: parseFloat(entryPrice.toFixed(5)),
     sl: parseFloat(slPrice.toFixed(5)),
-    tp: parseFloat(tpPrice.toFixed(5)),
     reason: decision.setup,
     confidence: decision.confidence,
     indicators: ind,
@@ -304,7 +297,7 @@ async function analyze(broker, config = {}) {
     const h4Ind = getIndicators(h4Candles);
     h4Trend = h4Ind.emaTrend;
   }
-  const decision = evaluate({ symbol, h4Trend, ind });
+  const decision = evaluate({ symbol, h4Trend, ind, config });
   if (!decision) return { signal: 'NONE', reason: 'No setup matched', indicators: ind };
   const entryPrice = decision.action === 'BUY'
     ? ind.currentPrice + 2 * pipToPrice(1, symbol)
@@ -312,15 +305,11 @@ async function analyze(broker, config = {}) {
   const slPrice = decision.action === 'BUY'
     ? entryPrice - decision.slPips * pipToPrice(1, symbol)
     : entryPrice + decision.slPips * pipToPrice(1, symbol);
-  const tpPrice = decision.action === 'BUY'
-    ? entryPrice + decision.tpPips * pipToPrice(1, symbol)
-    : entryPrice - decision.tpPips * pipToPrice(1, symbol);
   return {
     symbol,
     signal: decision.action,
     entry: parseFloat(entryPrice.toFixed(5)),
     sl: parseFloat(slPrice.toFixed(5)),
-    tp: parseFloat(tpPrice.toFixed(5)),
     reason: decision.setup,
     confidence: decision.confidence,
     indicators: ind,
@@ -335,7 +324,7 @@ module.exports = {
   getMultiTFIndicators,
   precalcIndicators,
   evaluate,
-  atrParams,
+  slParams,
   analyze,
   analyzeFromData,
   normalizeSignal,

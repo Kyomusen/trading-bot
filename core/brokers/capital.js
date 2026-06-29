@@ -137,7 +137,7 @@ class CapitalBroker extends BaseBroker {
     return map[tf] || 'HOUR';
   }
 
-  async placeOrder(symbol, type, size, sl, tp, comment = '') {
+  async placeOrder(symbol, type, size, sl, tp, comment = '', trailingOptions = null) {
     const epic = resolveEpic(symbol);
     const direction = type === 'BUY' ? 'BUY' : 'SELL';
     const body = {
@@ -149,8 +149,14 @@ class CapitalBroker extends BaseBroker {
       guaranteedStop: false,
       forceOpen: true,
       limitLevel: tp,
-      stopLevel: sl,
     };
+
+    if (trailingOptions?.enabled) {
+      body.trailingStop = true;
+      body.stopDistance = trailingOptions.distance;
+    } else {
+      body.stopLevel = sl;
+    }
 
     const res = await fetch(`${this.baseUrl}/api/v1/positions`, {
       method: 'POST',
