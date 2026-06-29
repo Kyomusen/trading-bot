@@ -45,19 +45,6 @@ function saveTrades(trades) {
   fs.writeFileSync(TRADES_FILE, JSON.stringify(trades, null, 2));
 }
 
-function waitForCandleClose() {
-  const now = new Date();
-  const next = new Date(now);
-  next.setHours(now.getHours() + 1, 0, 0, 0);
-  const ms = next.getTime() - now.getTime() + 2000;
-  const MAX_WAIT = 300000;
-  if (ms > 5000) {
-    const wait = Math.min(ms, MAX_WAIT);
-    console.log(`[Live] Waiting ${Math.round(wait / 1000)}s for candle close...`);
-    return new Promise(r => setTimeout(r, wait));
-  }
-}
-
 const DISPLAY_LIMIT = 30;
 
 class Runner {
@@ -104,8 +91,6 @@ class Runner {
     state.round = (state.round || 0) + 1;
     saveState(state);
     console.log(`\n🤖 Live Round #${state.round}`);
-
-    await waitForCandleClose();
 
     const results = [];
     for (const [symbol, entry] of this.brokers) {
