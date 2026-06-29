@@ -240,6 +240,7 @@ function generateChart(candles, ind, position = null, symbol = 'XAUUSD', timefra
     const lines = [
       { price: position.entryPrice, col: ENTRY_C, label: 'EN' },
       { price: position.stopLoss,   col: SL_C,    label: 'SL' },
+      { price: position.takeProfit, col: TP_C,    label: 'TP' },
     ].filter(l => l.price != null);
 
     for (const { price, col, label } of lines) {

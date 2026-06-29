@@ -91,6 +91,7 @@ class Runner {
     state.round = (state.round || 0) + 1;
     saveState(state);
     console.log(`\n🤖 Live Round #${state.round}`);
+    if (!state.lastSignals) state.lastSignals = {};
 
     const results = [];
     for (const [symbol, entry] of this.brokers) {
@@ -103,6 +104,12 @@ class Runner {
         console.log(`[${symbol}] Data: ${candles.length} candles`);
 
         const signal = await strategy.analyzeFromData(config, candles);
+
+        if (signal.signal !== 'NONE' && this._isDuplicateSignal(state.lastSignals, symbol, signal)) {
+          console.log(`[${symbol}] Duplicate signal: ${signal.signal} ${signal.reason}, skipping`);
+          signal.signal = 'NONE';
+          signal.reason = `Duplicate: ${signal.reason}`;
+        }
 
         let positionData = null;
         if (signal.signal !== 'NONE') {
@@ -165,6 +172,8 @@ class Runner {
                   status: 'OPEN',
                 });
                 saveTrades(trades);
+                state.lastSignals[symbol] = { signal: signal.signal, reason: signal.reason };
+                saveState(state);
               }
             }
           }
@@ -184,6 +193,12 @@ class Runner {
       }
     }
     return results;
+  }
+
+  _isDuplicateSignal(lastSignals, symbol, signal) {
+    const last = lastSignals?.[symbol];
+    if (!last) return false;
+    return last.signal === signal.signal && last.reason === signal.reason;
   }
 
   _calcSize(symbol, balance, dirMul, consecutiveLosses, config, slPips) {
