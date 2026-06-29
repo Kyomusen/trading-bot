@@ -50,9 +50,11 @@ function waitForCandleClose() {
   const next = new Date(now);
   next.setHours(now.getHours() + 1, 0, 0, 0);
   const ms = next.getTime() - now.getTime() + 2000;
+  const MAX_WAIT = 300000;
   if (ms > 5000) {
-    console.log(`[Live] Waiting ${Math.round(ms / 1000)}s for candle close...`);
-    return new Promise(r => setTimeout(r, ms));
+    const wait = Math.min(ms, MAX_WAIT);
+    console.log(`[Live] Waiting ${Math.round(wait / 1000)}s for candle close...`);
+    return new Promise(r => setTimeout(r, wait));
   }
 }
 
