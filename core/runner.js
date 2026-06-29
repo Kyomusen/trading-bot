@@ -484,7 +484,7 @@ class Runner {
       : null;
     this.discord.sendBacktestReport({ ...report, summary, artifactUrl: ghUrl });
 
-    return { report, jsonPath, htmlPath };
+    return { report, jsonPath };
   }
 
   async cleanup() {

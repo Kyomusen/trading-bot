@@ -77,6 +77,7 @@ class DiscordNotifier {
       title: `${emoji} Backtest: ${report.symbol}`,
       color: 0x0099ff,
       description: desc,
+      fields: [],
       timestamp: new Date().toISOString(),
       footer: { text: 'Backtest Report' },
     };
