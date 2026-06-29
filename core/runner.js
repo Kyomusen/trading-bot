@@ -401,7 +401,7 @@ class Runner {
             }
 
             const pvpl = shared.pipValuePerLot(symbol);
-            const maxLot = config.dynamicMaxLot ? Math.max(0.01, symState.balance / 50000) : (config.maxLot || 5);
+            const maxLot = config.dynamicMaxLot ? Math.min(config.maxLot || 5, Math.max(0.01, symState.balance / 50000)) : (config.maxLot || 5);
             const minLot = symbol.includes('XAU') ? 0.0001 : 0.01;
             let size;
             const ls = config.lossSizing;

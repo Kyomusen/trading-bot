@@ -69,7 +69,7 @@ function run(opts) {
           }
         }
         const pvpl = shared.pipValuePerLot('USDJPY');
-        const ml = cfg.dynamicMaxLot ? Math.max(0.01, balance/50000) : (cfg.maxLot||5);
+        const ml = cfg.dynamicMaxLot ? Math.min((cfg.maxLot||5), Math.max(0.01, balance/50000)) : (cfg.maxLot||5);
         let size; const ls = cfg.lossSizing;
         if (ls?.enabled && cl >= (ls.reduceAfter||1)) {
           const f = Math.max(ls.minFactor||0.1, (ls.reduceTo||0.65)**Math.floor(cl/(ls.reduceAfter||1))) * dm;
