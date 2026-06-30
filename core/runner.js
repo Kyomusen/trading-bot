@@ -116,6 +116,10 @@ class Runner {
         // Manage existing positions: update trailing stop progressively
         await this._managePositions(symbol, config, candles, state, entry);
 
+        // Get real open position from broker
+        const brokerPositions = await entry.broker.getOpenPositions(symbol);
+        let brokerPos = brokerPositions.length > 0 ? brokerPositions[0] : null;
+
         const signal = await strategy.analyzeFromData(config, candles);
 
         if (signal.signal !== 'NONE' && this._isDuplicateSignal(state.lastSignals, symbol, signal)) {
@@ -124,12 +128,12 @@ class Runner {
           signal.reason = `Duplicate: ${signal.reason}`;
         }
 
-        let positionData = null;
+        let orderPlaced = false;
         if (signal.signal !== 'NONE') {
           const broker = entry.broker;
+          const hasPos = brokerPos ? 1 : 0;
 
-          const positions = await broker.getOpenPositions(symbol);
-          if (positions.length >= (config.maxPositions || 1)) {
+          if (hasPos >= (config.maxPositions || 1)) {
             console.log(`[${symbol}] Max positions reached, skipping`);
           } else {
             const balance = await broker.getBalance();
@@ -171,8 +175,8 @@ class Runner {
                 }
                 await broker.placeOrder(symbol, signal.signal, finalSize, signal.sl, null, '', trailingOptions);
                 console.log(`[${symbol}] Order placed: ${signal.signal} size=${finalSize}`);
-                positionData = { entryPrice: signal.entry, stopLoss: signal.sl };
                 signal.lotSize = finalSize;
+                orderPlaced = true;
 
                 state.positions[symbol] = {
                   type: signal.signal,
@@ -206,10 +210,16 @@ class Runner {
           }
         }
 
+        // Re-fetch broker position after placing order to get real TSL
+        if (orderPlaced) {
+          const updated = await entry.broker.getOpenPositions(symbol);
+          brokerPos = updated.length > 0 ? updated[0] : null;
+        }
+
         const chartCandles = candles.slice(-DISPLAY_LIMIT);
         const ind = shared.getIndicators(candles);
-        const existingPos = state.positions?.[symbol] || null;
-        const chartBuffer = generateChart(chartCandles, ind, positionData, symbol, config.timeframe || 'H1', 600, 350, candles.map(c => c.close), existingPos);
+        const displayPos = brokerPos ? { entryPrice: brokerPos.entryPrice, sl: brokerPos.sl, type: brokerPos.type } : null;
+        const chartBuffer = generateChart(chartCandles, ind, displayPos, symbol, config.timeframe || 'H1', 600, 350, candles.map(c => c.close));
 
         const openPositionsSummary = {};
         const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
@@ -224,8 +234,8 @@ class Runner {
           openPositionsSummary[sym] = entry;
         }
 
-        console.log(`${symbol}: ${signal.signal}`);
-        await this.discord.sendLiveTrade(signal, chartBuffer, openPositionsSummary);
+        console.log(`${symbol}: ${signal.signal}${brokerPos ? ' (has position)' : ''}`);
+        await this.discord.sendLiveTrade(signal, chartBuffer, openPositionsSummary, state.round, displayPos);
         results.push({ symbol, signal, success: true });
       } catch (err) {
         console.error(`Error processing ${symbol}:`, err.message);

@@ -46,30 +46,35 @@ class DiscordNotifier {
     }
   }
 
-  async sendLiveTrade(signal, chartBuffer = null, openPositions = null) {
+  async sendLiveTrade(signal, chartBuffer = null, openPositions = null, round = 0, brokerPos = null) {
+    if (signal.signal === 'NONE') {
+      if (chartBuffer) {
+        await this.sendChartOnly(chartBuffer);
+      }
+      return;
+    }
+
     const isBuy = signal.signal === 'BUY';
-    const isSell = signal.signal === 'SELL';
-    const color = isBuy ? 0x00da7a : isSell ? 0xda3a3a : 0x808080;
-    const emoji = isBuy ? '🟢' : isSell ? '🔴' : '⚪';
+    const emoji = isBuy ? '🟢' : '🔴';
+    const color = isBuy ? 0x00da7a : 0xda3a3a;
     const dec = (signal.symbol?.includes('JPY') ? 3 : 2);
 
-    const entryStr = signal.entry != null ? signal.entry.toFixed(dec) : '-';
-    const slStr = signal.sl != null ? signal.sl.toFixed(dec) : '-';
+    const entryPrice = brokerPos?.entryPrice ?? signal.entry;
+    const tsl = brokerPos?.sl ?? signal.sl;
+    const lot = brokerPos?.size ?? signal.lotSize ?? '-';
 
-    const desc = `\`\`\`\nเข้า ${entryStr}  │  SL ${slStr}  │  Lot ${signal.lotSize ?? '-'}\n\`\`\``;
+    const entryStr = entryPrice != null ? entryPrice.toFixed(dec) : '-';
+    const tslStr = tsl != null ? tsl.toFixed(dec) : '-';
+
+    const title = `${emoji} #${round} ${signal.symbol} | ${isBuy ? 'BUY' : 'SELL'} Entry : ${entryStr} | TSL : ${tslStr} | Lot : ${lot}`;
 
     const fields = [];
     if (signal.indicators?.rsi != null || signal.indicators?.atr != null) {
+      const rsiVal = signal.indicators?.rsi?.toFixed(1) ?? '-';
+      const atrVal = signal.indicators?.atr?.toFixed(dec) ?? '-';
       fields.push({
         name: '📊 วิเคราะห์',
-        value: `RSI \`${signal.indicators?.rsi?.toFixed(1) ?? '-'}\`  ·  ATR \`${signal.indicators?.atr?.toFixed(dec) ?? '-'}\``,
-        inline: true,
-      });
-    }
-    if (signal.lotSize != null) {
-      fields.push({
-        name: '📦 ความเสี่ยง',
-        value: `ขนาด \`${signal.lotSize}\`  ·  SL \`${Math.abs(signal.entry - signal.sl).toFixed(dec)}\``,
+        value: `RSI \`${rsiVal}\`  ·  ATR \`${atrVal}\``,
         inline: true,
       });
     }
@@ -106,9 +111,8 @@ class DiscordNotifier {
     }
 
     const embed = {
-      title: `${emoji} ${signal.signal} ${signal.symbol}`,
+      title,
       color,
-      description: desc,
       fields,
       timestamp: new Date().toISOString(),
       footer: { text: `บอทเทรด · ${signal.symbol}` },
@@ -118,6 +122,27 @@ class DiscordNotifier {
       await this.sendWithAttachment(embed, chartBuffer);
     } else {
       await this.send(embed);
+    }
+  }
+
+  async sendChartOnly(chartBuffer) {
+    if (!this.webhookUrl) return;
+    try {
+      const form = new FormData();
+      form.append('payload_json', JSON.stringify({
+        embeds: [{
+          color: 0x2b2d31,
+          image: { url: 'attachment://chart.png' },
+        }],
+      }));
+      form.append('file', chartBuffer, 'chart.png');
+      await fetch(this.webhookUrl, {
+        method: 'POST',
+        body: form,
+        headers: form.getHeaders(),
+      });
+    } catch (err) {
+      console.error('Discord chart send failed:', err.message);
     }
   }
 

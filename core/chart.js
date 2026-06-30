@@ -125,7 +125,7 @@ function calcEMA(values, period) {
   return result;
 }
 
-function generateChart(candles, ind, position = null, symbol = 'XAUUSD', timeframe = 'H1', width = 600, height = 350, fullCloses = null, existingPos = null) {
+function generateChart(candles, ind, pos = null, symbol = 'XAUUSD', timeframe = 'H1', width = 600, height = 350, fullCloses = null) {
   const px = new Uint8Array(width * height * 4);
 
   const BG      = [18,  18,  36,  255];
@@ -139,10 +139,8 @@ function generateChart(candles, ind, position = null, symbol = 'XAUUSD', timefra
   const TXT     = [175, 175, 200, 255];
   const HDR     = [215, 215, 235, 255];
   const DIM     = [110, 110, 135, 255];
-  const ENTRY_C = [255, 191,   0, 230];
-  const SL_C    = [255,  65,  65, 230];
-  const POS_ENTRY_C = [  0, 220, 255, 210];
-  const POS_BEST_C  = [100, 255, 100, 180];
+  const ENTRY_C = [255, 191,   0, 240];
+  const SL_C    = [255,  65,  65, 240];
   const PROFIT_C    = [ 38, 220, 155, 255];
   const LOSS_C      = [255,  80,  80, 255];
 
@@ -177,12 +175,8 @@ function generateChart(candles, ind, position = null, symbol = 'XAUUSD', timefra
   }
 
   const prices = [...valid.map(v => v.h), ...valid.map(v => v.l)];
-  if (position?.entryPrice) prices.push(position.entryPrice);
-  if (position?.stopLoss)   prices.push(position.stopLoss);
-  if (existingPos) {
-    if (existingPos.entry != null) prices.push(existingPos.entry);
-    if (existingPos.bestPrice != null) prices.push(existingPos.bestPrice);
-  }
+  if (pos?.entryPrice != null) prices.push(pos.entryPrice);
+  if (pos?.sl != null) prices.push(pos.sl);
   const maxP  = Math.max(...prices);
   const minP  = Math.min(...prices);
   const pPad  = (maxP - minP) * 0.08 || 1;
@@ -242,36 +236,18 @@ function generateChart(candles, ind, position = null, symbol = 'XAUUSD', timefra
         setPixel(px, width, bx, by, col);
   }
 
-  const signalEntry = position?.entryPrice;
-  if (existingPos && existingPos.entry != null && existingPos.entry !== signalEntry) {
-    const y = Math.round(yOf(existingPos.entry));
-    if (y >= padT && y < padT + plotH) {
-      hLine(px, width, padL, padL + plotW - 1, y, POS_ENTRY_C, 4, 4);
-      drawText(px, width, padL + 2, y - 4, `${symbol}`, POS_ENTRY_C);
-      const dir = existingPos.type === 'BUY' ? '▲' : '▼';
-      drawText(px, width, padL + 2 + symbol.length * 6, y - 4, dir, existingPos.type === 'BUY' ? PROFIT_C : LOSS_C);
+  if (pos && pos.entryPrice != null) {
+    const yEntry = Math.round(yOf(pos.entryPrice));
+    if (yEntry >= padT && yEntry < padT + plotH) {
+      hLine(px, width, padL, padL + plotW - 1, yEntry, ENTRY_C, 5, 3);
+      drawText(px, width, padL + plotW - 14, yEntry - 4, 'EN', ENTRY_C);
     }
-  }
-
-  if (existingPos?.trailingActivated && existingPos.bestPrice != null) {
-    const y = Math.round(yOf(existingPos.bestPrice));
-    if (y >= padT && y < padT + plotH) {
-      hLine(px, width, padL, padL + plotW - 1, y, POS_BEST_C, 3, 5);
-      drawText(px, width, padL + plotW - 24, y - 4, 'BEST', POS_BEST_C);
-    }
-  }
-
-  if (position) {
-    const lines = [
-      { price: position.entryPrice, col: ENTRY_C, label: 'EN' },
-      { price: position.stopLoss,   col: SL_C,    label: 'SL' },
-    ].filter(l => l.price != null);
-
-    for (const { price, col, label } of lines) {
-      const y = Math.round(yOf(price));
-      if (y < padT || y >= padT + plotH) continue;
-      hLine(px, width, padL, padL + plotW - 1, y, col, 5, 3);
-      drawText(px, width, padL + plotW - 14, y - 4, label, col);
+    if (pos.sl != null) {
+      const ySl = Math.round(yOf(pos.sl));
+      if (ySl >= padT && ySl < padT + plotH && Math.abs(ySl - yEntry) > 1) {
+        hLine(px, width, padL, padL + plotW - 1, ySl, SL_C, 5, 3);
+        drawText(px, width, padL + plotW - 14, ySl - 4, 'SL', SL_C);
+      }
     }
   }
 
@@ -282,15 +258,13 @@ function generateChart(candles, ind, position = null, symbol = 'XAUUSD', timefra
   const dec = symbol.includes('JPY') ? 3 : 2;
   drawText(px, width, padL + 4, 8, `${symbol} ${timeframe}  ${lastClose.toFixed(dec)}`, HDR);
 
-  if (existingPos) {
-    const pnl = existingPos.type === 'BUY'
-      ? lastClose - existingPos.entry
-      : existingPos.entry - lastClose;
+  if (pos && pos.entryPrice != null) {
+    const pnl = pos.type === 'BUY'
+      ? lastClose - pos.entryPrice
+      : pos.entryPrice - lastClose;
     const pnlColor = pnl >= 0 ? PROFIT_C : LOSS_C;
-    const pnlSign = pnl >= 0 ? '+' : '';
-    const atrInfo = existingPos.atrValue ? ` ATR:${existingPos.atrValue.toFixed(dec)}` : '';
-    const trail = existingPos.trailingActivated ? ' TRAIL' : '';
-    const posText = `${existingPos.type} @${existingPos.entry.toFixed(dec)} ${pnlSign}${pnl.toFixed(dec)}${atrInfo}${trail}`;
+    const sign = pnl >= 0 ? '+' : '';
+    const posText = `${pos.type} EN @${pos.entryPrice.toFixed(dec)} ${sign}${pnl.toFixed(dec)}`;
     drawText(px, width, padL + 4, 18, posText, pnlColor);
   }
 
