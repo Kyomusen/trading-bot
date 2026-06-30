@@ -36,3 +36,12 @@ jobs:
           OANDA_DEMO: ${{ vars.OANDA_DEMO }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_ERROR_WEBHOOK_URL: ${{ secrets.DISCORD_ERROR_WEBHOOK_URL }}
+
+      - name: Upload live trade log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-trades
+          path: logs/live_trades.json
+          if-no-files-found: ignore
+          retention-days: 30

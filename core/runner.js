@@ -167,45 +167,40 @@ class Runner {
                 console.log(`[${symbol}] Size ${size.toFixed(4)} > max ${validation.max}, capping`);
               }
 
-              if (finalSize > 0) {
-                let trailingOptions = null;
-                if (config.trailing && signal.indicators?.atr) {
-                  const dist = (config.trailingDistance ?? 0.1) * signal.indicators.atr;
-                  trailingOptions = { enabled: true, distance: parseFloat(dist.toFixed(5)) };
+                if (finalSize > 0) {
+                  await broker.placeOrder(symbol, signal.signal, finalSize, signal.sl, null, '');
+                  console.log(`[${symbol}] Order placed: ${signal.signal} size=${finalSize}`);
+                  signal.lotSize = finalSize;
+                  orderPlaced = true;
+
+                  state.positions[symbol] = {
+                    type: signal.signal,
+                    entry: signal.entry,
+                    sl: signal.sl,
+                    size: finalSize,
+                    atrValue: signal.indicators?.atr || 0,
+                    bestPrice: signal.entry,
+                    currentTrailDist: null,
+                    trailingActivated: false,
+                  };
+                  saveState(state);
+
+                  const trades = loadTrades();
+                  trades.push({
+                    round: state.round,
+                    time: new Date().toISOString(),
+                    symbol,
+                    action: signal.signal,
+                    entry: signal.entry,
+                    sl: signal.sl,
+                    size: finalSize,
+                    setup: signal.reason,
+                    status: 'OPEN',
+                  });
+                  saveTrades(trades);
+                  state.lastSignals[symbol] = { signal: signal.signal, reason: signal.reason };
+                  saveState(state);
                 }
-                await broker.placeOrder(symbol, signal.signal, finalSize, signal.sl, null, '', trailingOptions);
-                console.log(`[${symbol}] Order placed: ${signal.signal} size=${finalSize}`);
-                signal.lotSize = finalSize;
-                orderPlaced = true;
-
-                state.positions[symbol] = {
-                  type: signal.signal,
-                  entry: signal.entry,
-                  sl: signal.sl,
-                  size: finalSize,
-                  atrValue: signal.indicators?.atr || 0,
-                  bestPrice: signal.entry,
-                  currentTrailDist: config.trailing ? (config.trailingDistance ?? 0.1) : null,
-                  trailingActivated: false,
-                };
-                saveState(state);
-
-                const trades = loadTrades();
-                trades.push({
-                  round: state.round,
-                  time: new Date().toISOString(),
-                  symbol,
-                  action: signal.signal,
-                  entry: signal.entry,
-                  sl: signal.sl,
-                  size: finalSize,
-                  setup: signal.reason,
-                  status: 'OPEN',
-                });
-                saveTrades(trades);
-                state.lastSignals[symbol] = { signal: signal.signal, reason: signal.reason };
-                saveState(state);
-              }
             }
           }
         }
@@ -327,11 +322,18 @@ class Runner {
           Math.max(0.02, baseDist + (profitPct - baseActivate) * progFactor)
         );
 
-        if (Math.abs(trailDist - (sp.currentTrailDist || 0)) > 0.001) {
+        if (!sp.trailingActivated) {
+          // Activate trailing on Capital.com (convert from fixed SL to trailing stop)
           const stopDistPrice = parseFloat((trailDist * sp.atrValue).toFixed(5));
           await entry.broker.updatePositionTrailingStop(pos.id, stopDistPrice);
           sp.currentTrailDist = trailDist;
           sp.trailingActivated = true;
+          console.log(`[${symbol}] Trailing STOP ACTIVATED: dist=${trailDist.toFixed(4)} ATR (stopDistance=${stopDistPrice})`);
+          saveState(state);
+        } else if (Math.abs(trailDist - (sp.currentTrailDist || 0)) > 0.001) {
+          const stopDistPrice = parseFloat((trailDist * sp.atrValue).toFixed(5));
+          await entry.broker.updatePositionTrailingStop(pos.id, stopDistPrice);
+          sp.currentTrailDist = trailDist;
           console.log(`[${symbol}] Trailing stop updated: dist=${trailDist.toFixed(4)} ATR (stopDistance=${stopDistPrice})`);
           saveState(state);
         }
