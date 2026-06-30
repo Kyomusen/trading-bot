@@ -244,8 +244,9 @@ class Runner {
   _isDuplicateSignal(lastSignals, symbol, signal) {
     const last = lastSignals?.[symbol];
     if (!last) return false;
+    if (!last.time) return false;
     const hours = global.config?.duplicateHours ?? 6;
-    if (last.time && Date.now() - last.time > hours * 3600000) return false;
+    if (Date.now() - last.time > hours * 3600000) return false;
     return last.signal === signal.signal && last.reason === signal.reason;
   }
 
