@@ -343,6 +343,315 @@ class Runner {
     }
   }
 
+  async runStream() {
+    const state = loadState();
+    state.round = (state.round || 0) + 1;
+    saveState(state);
+    console.log(`\n🤖 Streaming Mode #${state.round}`);
+    if (!state.lastSignals) state.lastSignals = {};
+    if (!state.positions) state.positions = {};
+    if (!state.consecutiveLosses) state.consecutiveLosses = {};
+    this._pendingTrailOps = new Map();
+
+    const MarketStream = require('./marketStream');
+    const timers = [];
+
+    for (const [symbol, entry] of this.brokers) {
+      const { config } = entry;
+
+      const brokerType = config.broker || 'capital';
+      const brokerConfig = this._getBrokerConfig(brokerType);
+      const broker = createBroker(brokerType, brokerConfig);
+      await broker.connect();
+      entry.broker = broker;
+
+      const candles = await fetchCandlesCached(symbol, config.timeframe || 'H1', config);
+      console.log(`[${symbol}] Initial data: ${candles.length} candles`);
+
+      const shared = require('./strategy');
+      const strategy = require(`../symbols/${symbol}/strategy`);
+      const EPIC_MAP = { XAUUSD: 'GOLD', USDJPY: 'USDJPY' };
+      const epic = EPIC_MAP[symbol] || symbol;
+
+      // Restore or detect existing broker position
+      const brokerPositions = await broker.getOpenPositions(symbol);
+      if (brokerPositions.length > 0) {
+        const pos = brokerPositions[0];
+        if (!state.positions[symbol]) {
+          const ind = shared.getIndicators(candles);
+          state.positions[symbol] = {
+            type: pos.type,
+            entry: pos.entryPrice,
+            sl: pos.sl,
+            size: pos.size,
+            atrValue: ind.atr || 0,
+            bestPrice: pos.entryPrice,
+            currentTrailDist: null,
+            trailingActivated: false,
+            dealId: pos.id,
+          };
+          saveState(state);
+          console.log(`[${symbol}] Restored position: ${pos.type} ${pos.size} @ ${pos.entryPrice}`);
+        } else {
+          state.positions[symbol].dealId = pos.id;
+          saveState(state);
+        }
+      }
+
+      // Connect WebSocket for real-time prices
+      const stream = new MarketStream({
+        cst: broker.cst,
+        securityToken: broker.securityToken,
+        demo: brokerConfig.demo,
+      });
+      await stream.connect();
+      stream.subscribe(epic);
+      console.log(`[${symbol}] WebSocket connected → ${epic}`);
+
+      let lastH1Time = candles.length > 0
+        ? this._getH1Start(new Date(candles[candles.length - 1].time))
+        : this._getH1Start(new Date());
+
+      // Price tick → update bestPrice, queue trail operations
+      stream.on(`price:${epic}`, (payload) => {
+        const bid = payload?.closePrice?.bid ?? payload?.bid ?? null;
+        if (bid == null) return;
+        this._manageStreamPosition(symbol, config, state, bid);
+      });
+
+      // Process pending trail operations every 5s
+      const trailTimer = setInterval(() => {
+        this._processStreamTrail(symbol, config, state, entry).catch(() => {});
+      }, 5000);
+      timers.push(trailTimer);
+
+      // Check for new H1 candle every 30s → run signal analysis
+      const candleTimer = setInterval(() => {
+        const now = new Date();
+        const h1Start = this._getH1Start(now);
+        if (h1Start <= lastH1Time) return;
+        lastH1Time = h1Start;
+        console.log(`[${symbol}] New H1 candle`);
+        this._handleStreamSignal(symbol, config, state, entry, broker).catch(() => {});
+      }, 30000);
+      timers.push(candleTimer);
+
+      // Refresh position from broker every 60s
+      const refreshTimer = setInterval(() => {
+        this._checkStreamPosition(symbol, config, state, entry).catch(() => {});
+      }, 60000);
+      timers.push(refreshTimer);
+    }
+
+    const shutdown = () => {
+      console.log('\nShutting down...');
+      for (const t of timers) clearInterval(t);
+      for (const [, e] of this.brokers) {
+        if (e.broker) e.broker.disconnect();
+      }
+      process.exit(0);
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+
+    await new Promise(() => {});
+  }
+
+  _getH1Start(date) {
+    return Math.floor(date.getTime() / 3600000) * 3600000;
+  }
+
+  _manageStreamPosition(symbol, config, state, bid) {
+    const sp = state.positions?.[symbol];
+    if (!sp || !sp.atrValue || sp.atrValue <= 0) return;
+    if (!config.trailing) return;
+
+    if (sp.type === 'BUY' && bid > sp.bestPrice) sp.bestPrice = bid;
+    else if (sp.type === 'SELL' && bid < sp.bestPrice) sp.bestPrice = bid;
+
+    const profitPct = sp.type === 'BUY'
+      ? (sp.bestPrice - sp.entry) / sp.atrValue
+      : (sp.entry - sp.bestPrice) / sp.atrValue;
+
+    const baseActivate = config.trailingActivate ?? 0.2;
+    if (profitPct < baseActivate) return;
+
+    const baseDist = config.trailingDistance ?? 0.1;
+    const maxDist = config.trailingDistanceMax ?? 0.5;
+    const progFactor = config.trailingProgressive ?? 0.01;
+
+    const trailDist = Math.min(
+      maxDist,
+      Math.max(0.02, baseDist + (profitPct - baseActivate) * progFactor)
+    );
+
+    if (!sp.trailingActivated) {
+      if (!this._pendingTrailOps.has(symbol)) {
+        this._pendingTrailOps.set(symbol, { action: 'activate', trailDist });
+      }
+    } else if (Math.abs(trailDist - (sp.currentTrailDist || 0)) > 0.001) {
+      const prev = this._pendingTrailOps.get(symbol);
+      if (!prev || Math.abs(trailDist - prev.trailDist) > 0.001) {
+        this._pendingTrailOps.set(symbol, { action: 'update', trailDist });
+      }
+    }
+  }
+
+  async _processStreamTrail(symbol, config, state, entry) {
+    if (!this._pendingTrailOps.has(symbol)) return;
+    const op = this._pendingTrailOps.get(symbol);
+    this._pendingTrailOps.delete(symbol);
+
+    const sp = state.positions?.[symbol];
+    if (!sp || !sp.dealId) return;
+
+    try {
+      const stopDistPrice = parseFloat((op.trailDist * sp.atrValue).toFixed(5));
+      await entry.broker.updatePositionTrailingStop(sp.dealId, stopDistPrice);
+
+      if (op.action === 'activate') {
+        sp.trailingActivated = true;
+        sp.currentTrailDist = op.trailDist;
+        saveState(state);
+        console.log(`[${symbol}] ⚡ TSL ACTIVATED @ ${op.trailDist.toFixed(4)} ATR (stopDist=${stopDistPrice})`);
+      } else {
+        sp.currentTrailDist = op.trailDist;
+        saveState(state);
+        console.log(`[${symbol}] TSL updated ${op.trailDist.toFixed(4)} ATR (stopDist=${stopDistPrice})`);
+      }
+    } catch (err) {
+      console.error(`[${symbol}] Trail op failed: ${err.message}`);
+    }
+  }
+
+  async _handleStreamSignal(symbol, config, state, entry, broker) {
+    try {
+      const shared = require('./strategy');
+      const strategy = require(`../symbols/${symbol}/strategy`);
+      const candles = await fetchCandlesCached(symbol, config.timeframe || 'H1', config);
+
+      const signal = await strategy.analyzeFromData(config, candles);
+
+      if (signal.signal !== 'NONE' && this._isDuplicateSignal(state.lastSignals, symbol, signal)) {
+        console.log(`[${symbol}] Duplicate signal: ${signal.signal} ${signal.reason}, skipping`);
+        signal.signal = 'NONE';
+      }
+
+      const hasPos = (state.positions?.[symbol]?.dealId) != null;
+
+      if (signal.signal !== 'NONE' && !hasPos) {
+        const balance = await broker.getBalance();
+        const slDist = Math.abs(signal.entry - signal.sl);
+        const slPips = slDist / pipToPrice(1, symbol);
+        const pvpl = pipValuePerLot(symbol);
+        const riskAmt = balance * (config.riskPercent / 100);
+        const dr = CapitalBroker.loadDealingRulesCache(symbol);
+        const brokerMax = dr ? dr.maxDealSize : 999999;
+        let size = Math.max(0.01, riskAmt / (slPips * pvpl));
+        size = Math.min(size, config.maxLot || 5, brokerMax);
+
+        if (size > 0) {
+          const validation = await broker.validateSize(symbol, size);
+          const finalSize = validation.valid ? validation.size : 0;
+
+          if (finalSize > 0) {
+            await broker.placeOrder(symbol, signal.signal, finalSize, signal.sl, null, '');
+            console.log(`[${symbol}] ✅ Order placed: ${signal.signal} size=${finalSize} entry=${signal.entry} sl=${signal.sl}`);
+
+            state.positions[symbol] = {
+              type: signal.signal,
+              entry: signal.entry,
+              sl: signal.sl,
+              size: finalSize,
+              atrValue: signal.indicators?.atr || 0,
+              bestPrice: signal.entry,
+              currentTrailDist: null,
+              trailingActivated: false,
+              dealId: null,
+            };
+
+            const trades = loadTrades();
+            trades.push({
+              round: state.round,
+              time: new Date().toISOString(),
+              symbol,
+              action: signal.signal,
+              entry: signal.entry,
+              sl: signal.sl,
+              size: finalSize,
+              setup: signal.reason,
+              status: 'OPEN',
+            });
+            saveTrades(trades);
+            state.lastSignals[symbol] = { signal: signal.signal, reason: signal.reason };
+            saveState(state);
+
+            // Fetch dealId after placing
+            const updated = await broker.getOpenPositions(symbol);
+            if (updated.length > 0) {
+              state.positions[symbol].dealId = updated[0].id;
+              saveState(state);
+            }
+          }
+        }
+      }
+
+      // Discord notification
+      const ind = shared.getIndicators(candles);
+      const chartCandles = candles.slice(-DISPLAY_LIMIT);
+      const brokerPos = hasPos ? await broker.getOpenPositions(symbol).catch(() => []) : [];
+      const displayPos = brokerPos.length > 0
+        ? { entryPrice: brokerPos[0].entryPrice, sl: brokerPos[0].sl, type: brokerPos[0].type }
+        : null;
+      const chartBuffer = generateChart(chartCandles, ind, displayPos, symbol, config.timeframe || 'H1', 600, 350, candles.map(c => c.close));
+
+      const openPositionsSummary = {};
+      const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
+      for (const [sym, pos] of Object.entries(state.positions || {})) {
+        const p = { ...pos };
+        if (sym === symbol && currentPrice != null && pos.size) {
+          const pvpl = pipValuePerLot(sym);
+          p.pnl = pos.type === 'BUY'
+            ? (currentPrice - pos.entry) * pos.size * pvpl
+            : (pos.entry - currentPrice) * pos.size * pvpl;
+        }
+        openPositionsSummary[sym] = p;
+      }
+
+      await this.discord.sendLiveTrade(signal, chartBuffer, openPositionsSummary, state.round, displayPos, currentPrice);
+    } catch (err) {
+      console.error(`[${symbol}] Signal analysis error:`, err.message);
+    }
+  }
+
+  async _checkStreamPosition(symbol, config, state, entry) {
+    try {
+      const positions = await entry.broker.getOpenPositions(symbol);
+
+      if (positions.length === 0 && state.positions?.[symbol]) {
+        const closed = state.positions[symbol];
+        console.log(`[${symbol}] 🔒 Position closed by broker: ${closed.type} entry=${closed.entry}`);
+
+        delete state.positions[symbol];
+        saveState(state);
+
+        const trades = loadTrades();
+        const lastTrade = [...trades].reverse().find(t => t.symbol === symbol && t.status === 'OPEN');
+        if (lastTrade) {
+          lastTrade.status = 'CLOSED';
+          lastTrade.closeTime = new Date().toISOString();
+          saveTrades(trades);
+        }
+      } else if (positions.length > 0 && state.positions?.[symbol]) {
+        state.positions[symbol].dealId = positions[0].id;
+        state.positions[symbol].sl = positions[0].sl;
+        saveState(state);
+      }
+    } catch (err) {
+      console.error(`[${symbol}] Position check error:`, err.message);
+    }
+  }
+
   runBacktest(symbol, candles = null) {
     const { config } = this.brokers.get(symbol) || {};
     if (!config) throw new Error(`Symbol ${symbol} not configured`);
@@ -602,6 +911,8 @@ async function main() {
     if (mode === 'backtest') {
       if (!symbol) throw new Error('Symbol required for backtest');
       await runner.runBacktest(symbol);
+    } else if (mode === 'stream') {
+      await runner.runStream();
     } else {
       await runner.runLive();
     }
