@@ -407,11 +407,50 @@ class Runner {
           state.positions[symbol].dealId = pos.id;
           saveState(state);
         }
+        // Ensure trade history has an OPEN record for this position
+        const trades = loadTrades();
+        const hasOpen = trades.some(t => t.symbol === symbol && t.status === 'OPEN');
+        if (!hasOpen) {
+          trades.push({
+            round: state.round,
+            time: new Date().toISOString(),
+            symbol,
+            action: pos.type,
+            entry: pos.entryPrice,
+            sl: pos.sl,
+            size: pos.size,
+            setup: 'restored',
+            status: 'OPEN',
+          });
+          saveTrades(trades);
+        }
       } else if (state.positions?.[symbol]) {
         // Position was stopped out while bot was down
         console.log(`[${symbol}] Position closed on broker, clearing stale state`);
+        const closed = state.positions[symbol];
         delete state.positions[symbol];
         saveState(state);
+        // Record the close in trade history
+        const trades = loadTrades();
+        const openTrade = [...trades].reverse().find(t => t.symbol === symbol && t.status === 'OPEN');
+        if (openTrade) {
+          openTrade.status = 'CLOSED';
+          openTrade.closeTime = new Date().toISOString();
+        } else {
+          trades.push({
+            round: state.round,
+            time: closed.time || new Date().toISOString(),
+            symbol,
+            action: closed.type,
+            entry: closed.entry,
+            sl: closed.sl,
+            size: closed.size,
+            setup: 'restored',
+            status: 'CLOSED',
+            closeTime: new Date().toISOString(),
+          });
+        }
+        saveTrades(trades);
       }
 
       // Connect WebSocket for real-time prices
@@ -677,8 +716,21 @@ class Runner {
         if (lastTrade) {
           lastTrade.status = 'CLOSED';
           lastTrade.closeTime = new Date().toISOString();
-          saveTrades(trades);
+        } else {
+          trades.push({
+            round: state.round,
+            time: closed.time || new Date().toISOString(),
+            symbol,
+            action: closed.type,
+            entry: closed.entry,
+            sl: closed.sl,
+            size: closed.size,
+            setup: 'restored',
+            status: 'CLOSED',
+            closeTime: new Date().toISOString(),
+          });
         }
+        saveTrades(trades);
       } else if (positions.length > 0 && state.positions?.[symbol]) {
         state.positions[symbol].dealId = positions[0].id;
         state.positions[symbol].sl = positions[0].sl;
