@@ -379,7 +379,13 @@ class Runner {
       const epic = EPIC_MAP[symbol] || symbol;
 
       // Restore or detect existing broker position
-      const brokerPositions = await broker.getOpenPositions(symbol);
+      let brokerPositions;
+      try {
+        brokerPositions = await broker.getOpenPositions(symbol);
+      } catch (err) {
+        console.log(`[${symbol}] Failed to fetch positions: ${err.message}`);
+        brokerPositions = [];
+      }
       if (brokerPositions.length > 0) {
         const pos = brokerPositions[0];
         if (!state.positions[symbol]) {
@@ -401,6 +407,11 @@ class Runner {
           state.positions[symbol].dealId = pos.id;
           saveState(state);
         }
+      } else if (state.positions?.[symbol]) {
+        // Position was stopped out while bot was down
+        console.log(`[${symbol}] Position closed on broker, clearing stale state`);
+        delete state.positions[symbol];
+        saveState(state);
       }
 
       // Connect WebSocket for real-time prices

@@ -83,7 +83,7 @@ class CapitalBroker extends BaseBroker {
       try {
         console.log('[Capital] Session expired, reconnecting...');
         await this.connect();
-        const newOpts = { ...options, headers: { ...this._authHeaders(), ...options.headers } };
+        const newOpts = { ...options, headers: { ...options.headers, ...this._authHeaders() } };
         return await fetch(url, newOpts);
       } finally {
         this._reconnecting = false;
