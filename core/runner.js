@@ -88,7 +88,7 @@ class Runner {
 
   async runLive() {
     const state = loadState();
-    state.round = (state.round || 0) + 1;
+    state.round = parseInt(process.env.GITHUB_RUN_NUMBER, 10) || (state.round || 0) + 1;
     saveState(state);
     console.log(`\n🤖 Live Round #${state.round}`);
     if (!state.lastSignals) state.lastSignals = {};
