@@ -413,9 +413,14 @@ class Runner {
         : this._getH1Start(new Date());
 
       // Price tick → update bestPrice, queue trail operations
+      let tickCount = 0;
       stream.on(`price:${epic}`, (payload) => {
         const bid = payload?.closePrice?.bid ?? payload?.bid ?? null;
         if (bid == null) return;
+        tickCount++;
+        if (tickCount % 100 === 0) {
+          console.log(`[${symbol}] Price: ${bid} (ticks: ${tickCount})`);
+        }
         this._manageStreamPosition(symbol, config, state, bid);
       });
 
@@ -442,6 +447,13 @@ class Runner {
       }, 60000);
       timers.push(refreshTimer);
     }
+
+    // Heartbeat every 5 minutes
+    const heartbeatTimer = setInterval(() => {
+      const pos = [...this.brokers.keys()].map(s => state.positions?.[s] ? 'OPEN' : 'NONE').join(', ');
+      console.log(`[HEARTBEAT] Round #${state.round} | Positions: ${pos || 'NONE'} | ${new Date().toISOString()}`);
+    }, 300000);
+    timers.push(heartbeatTimer);
 
     const shutdown = () => {
       console.log('\nShutting down...');
