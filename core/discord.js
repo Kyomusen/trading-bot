@@ -46,21 +46,72 @@ class DiscordNotifier {
     }
   }
 
-  async sendLiveTrade(signal, chartBuffer = null) {
-    const color = signal.signal === 'BUY' ? 0x00ff00 : signal.signal === 'SELL' ? 0xff0000 : 0x808080;
-    const emoji = signal.signal === 'BUY' ? '🟢' : signal.signal === 'SELL' ? '🔴' : '⚪';
+  async sendLiveTrade(signal, chartBuffer = null, openPositions = null) {
+    const isBuy = signal.signal === 'BUY';
+    const isSell = signal.signal === 'SELL';
+    const color = isBuy ? 0x00da7a : isSell ? 0xda3a3a : 0x808080;
+    const emoji = isBuy ? '🟢' : isSell ? '🔴' : '⚪';
+    const dec = (signal.symbol?.includes('JPY') ? 3 : 2);
+
+    const entryStr = signal.entry != null ? signal.entry.toFixed(dec) : '-';
+    const slStr = signal.sl != null ? signal.sl.toFixed(dec) : '-';
+
+    const desc = `\`\`\`\nเข้า ${entryStr}  │  SL ${slStr}  │  Lot ${signal.lotSize ?? '-'}\n\`\`\``;
+
+    const fields = [];
+    if (signal.indicators?.rsi != null || signal.indicators?.atr != null) {
+      fields.push({
+        name: '📊 วิเคราะห์',
+        value: `RSI \`${signal.indicators?.rsi?.toFixed(1) ?? '-'}\`  ·  ATR \`${signal.indicators?.atr?.toFixed(dec) ?? '-'}\``,
+        inline: true,
+      });
+    }
+    if (signal.lotSize != null) {
+      fields.push({
+        name: '📦 ความเสี่ยง',
+        value: `ขนาด \`${signal.lotSize}\`  ·  SL \`${Math.abs(signal.entry - signal.sl).toFixed(dec)}\``,
+        inline: true,
+      });
+    }
+    if (signal.reason) {
+      fields.push({
+        name: '💡 เหตุผล',
+        value: signal.reason,
+        inline: false,
+      });
+    }
+
+    if (openPositions && Object.keys(openPositions).length > 0) {
+      const lines = [];
+      let totalPnl = 0;
+      for (const [sym, pos] of Object.entries(openPositions)) {
+        const dir = pos.type === 'BUY' ? '▲' : '▼';
+        const pnl = pos.pnl != null ? pos.pnl : 0;
+        totalPnl += pnl;
+        const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+        const entryStr = (pos.entry?.toString() ?? '-').padEnd(10);
+        const trailing = pos.trailingActivated ? ' ⚡' : '';
+        lines.push(`${dir} ${sym.padEnd(8)} ${entryStr} ${pnlStr.padStart(10)}${trailing}`);
+      }
+      if (lines.length > 0) {
+        const totalStr = `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`;
+        const sep = '─'.repeat(32);
+        const posTable = `\`\`\`\n${lines.join('\n')}\n${sep}\nรวม  ${totalStr.padStart(10)}\n\`\`\``;
+        fields.push({
+          name: `📋 ออเดอร์ (${Object.keys(openPositions).length})`,
+          value: posTable,
+          inline: false,
+        });
+      }
+    }
+
     const embed = {
-      title: `${emoji} Live Signal: ${signal.signal} ${signal.symbol}`,
+      title: `${emoji} ${signal.signal} ${signal.symbol}`,
       color,
-      fields: [
-        { name: '📍 Entry', value: signal.entry?.toString() ?? '-', inline: true },
-        { name: '🛑 SL', value: signal.sl?.toString() ?? '-', inline: true },
-        { name: '📊 Technicals', value: `RSI: ${signal.indicators?.rsi?.toFixed(1) ?? '-'} | ATR: ${signal.indicators?.atr?.toFixed(2) ?? '-'}`, inline: true },
-        { name: '📦 Lot Size', value: signal.lotSize?.toString() ?? '-', inline: true },
-        { name: '📝 Reason', value: signal.reason ?? '-', inline: false },
-      ],
+      description: desc,
+      fields,
       timestamp: new Date().toISOString(),
-      footer: { text: 'Trading Bot' },
+      footer: { text: `บอทเทรด · ${signal.symbol}` },
     };
     if (chartBuffer) {
       embed.image = { url: 'attachment://chart.png' };
@@ -71,26 +122,47 @@ class DiscordNotifier {
   }
 
   async sendBacktestReport(report) {
-    const emoji = report.netProfit >= 0 ? '📈' : '📉';
-    const desc = `**Net**: $${this._fmt(report.netProfit)}  **WR**: ${report.winRate.toFixed(1)}%  **PF**: ${report.profitFactor.toFixed(2)}  **DD**: ${report.maxDrawdown.toFixed(1)}%  **Trades**: ${report.totalTrades}`;
+    const isProfitable = report.netProfit >= 0;
+    const color = isProfitable ? 0x00da7a : 0xda3a3a;
+    const emoji = isProfitable ? '📈' : '📉';
+    const netStr = `${isProfitable ? '+' : ''}$${this._fmtMoney(report.netProfit)}`;
+    const retStr = `${report.returnPct >= 0 ? '+' : ''}${report.returnPct?.toFixed(1) ?? '?'}%`;
+
+    const desc = [
+      `\`\`\`diff`,
+      `${isProfitable ? '+ ' : '- '} กำไรสุทธิ : ${netStr}`,
+      `  ผลตอบแทน : ${retStr}`,
+      `  ชนะ ${report.winRate.toFixed(1)}%`,
+      `  PF ${report.profitFactor.toFixed(2)}`,
+      `  DD สูงสุด ${report.maxDrawdown.toFixed(1)}%`,
+      `  เทรดทั้งหมด ${report.totalTrades}`,
+      `\`\`\``,
+    ].join('\n');
+
     const embed = {
-      title: `${emoji} Backtest: ${report.symbol}`,
-      color: 0x0099ff,
+      title: `${emoji} ทดสอบย้อนหลัง · ${report.symbol}`,
+      color,
       description: desc,
       fields: [],
       timestamp: new Date().toISOString(),
-      footer: { text: 'Backtest Report' },
+      footer: { text: 'รายงานทดสอบ' },
     };
     if (report.summary) {
       const yearlySection = report.summary.split('--- Yearly Breakdown ---')[1]?.trim();
       if (yearlySection) {
-        embed.fields.push({ name: '📅 Yearly Breakdown', value: '```\n' + yearlySection.slice(0, 1000) + '\n```', inline: false });
+        embed.fields.push({ name: '📅 แยกตามปี', value: '```\n' + yearlySection.slice(0, 1000) + '\n```', inline: false });
       }
     }
     if (report.artifactUrl) {
-      embed.fields.push({ name: '🔗 Artifact', value: `[View Report](${report.artifactUrl})`, inline: false });
+      embed.fields.push({ name: '🔗 รายงาน', value: `[เปิดรายงาน](${report.artifactUrl})`, inline: false });
     }
     await this.send(embed);
+  }
+
+  _fmtMoney(n) {
+    if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+    if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(2) + 'K';
+    return n.toFixed(2);
   }
 
   _fmt(n) {
@@ -104,16 +176,21 @@ class DiscordNotifier {
       console.log('No Discord error webhook configured, skipping error notification');
       return;
     }
+    const ctxStr = Object.keys(context).length > 0
+      ? `\`\`\`\n${Object.entries(context).map(([k, v]) => `${k}: ${v}`).join('\n').slice(0, 950)}\n\`\`\``
+      : '';
+    const fields = [
+      { name: '⚠️ ข้อผิดพลาด', value: `\`${error.message || String(error)}\``, inline: false },
+    ];
+    if (ctxStr) {
+      fields.push({ name: '📋 บริบท', value: ctxStr, inline: false });
+    }
     const embed = {
-      title: '🚨 Critical Error Detected',
-      color: 0xff0000,
-      description: `\`${error.message || String(error)}\``,
-      fields: [
-        { name: '🔍 Context', value: `\`\`\`json\n${JSON.stringify(context, null, 2).slice(0, 950)}\n\`\`\``, inline: false },
-        { name: '🛠️ Action Required', value: 'Check logs and verify system status.', inline: false },
-      ],
+      title: '🚨 เกิดข้อผิดพลาด',
+      color: 0xda3a3a,
+      fields,
       timestamp: new Date().toISOString(),
-      footer: { text: 'Error Monitor' },
+      footer: { text: 'ระบบแจ้งเตือน' },
     };
     await this._post(this.errorWebhookUrl, embed);
   }

@@ -177,6 +177,8 @@ class Runner {
                 state.positions[symbol] = {
                   type: signal.signal,
                   entry: signal.entry,
+                  sl: signal.sl,
+                  size: finalSize,
                   atrValue: signal.indicators?.atr || 0,
                   bestPrice: signal.entry,
                   currentTrailDist: config.trailing ? (config.trailingDistance ?? 0.1) : null,
@@ -206,10 +208,24 @@ class Runner {
 
         const chartCandles = candles.slice(-DISPLAY_LIMIT);
         const ind = shared.getIndicators(candles);
-        const chartBuffer = generateChart(chartCandles, ind, positionData, symbol, config.timeframe || 'H1', 600, 300, candles.map(c => c.close));
+        const existingPos = state.positions?.[symbol] || null;
+        const chartBuffer = generateChart(chartCandles, ind, positionData, symbol, config.timeframe || 'H1', 600, 350, candles.map(c => c.close), existingPos);
+
+        const openPositionsSummary = {};
+        const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
+        for (const [sym, pos] of Object.entries(state.positions || {})) {
+          const entry = { ...pos };
+          if (sym === symbol && currentPrice != null && pos.size) {
+            const pvpl = pipValuePerLot(sym);
+            entry.pnl = pos.type === 'BUY'
+              ? (currentPrice - pos.entry) * pos.size * pvpl
+              : (pos.entry - currentPrice) * pos.size * pvpl;
+          }
+          openPositionsSummary[sym] = entry;
+        }
 
         console.log(`${symbol}: ${signal.signal}`);
-        await this.discord.sendLiveTrade(signal, chartBuffer);
+        await this.discord.sendLiveTrade(signal, chartBuffer, openPositionsSummary);
         results.push({ symbol, signal, success: true });
       } catch (err) {
         console.error(`Error processing ${symbol}:`, err.message);
