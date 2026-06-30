@@ -47,26 +47,19 @@ class DiscordNotifier {
   }
 
   async sendLiveTrade(signal, chartBuffer = null, openPositions = null, round = 0, brokerPos = null) {
-    if (signal.signal === 'NONE') {
-      if (chartBuffer) {
-        await this.sendChartOnly(chartBuffer);
-      }
+    const isBuy = signal.signal === 'BUY';
+    const isNone = signal.signal === 'NONE';
+    const emoji = isBuy ? '🟢' : isNone ? '⚪' : '🔴';
+    const color = isBuy ? 0x00da7a : isNone ? 0x808080 : 0xda3a3a;
+
+    const title = `${emoji} #${round} ${signal.symbol}${isNone ? '' : ` | ${isBuy ? 'BUY' : 'SELL'}`}`;
+
+    if (isNone) {
+      const embed = { title, color, timestamp: new Date().toISOString(), footer: { text: `บอทเทรด · ${signal.symbol}` } };
+      if (chartBuffer) { embed.image = { url: 'attachment://chart.png' }; await this.sendWithAttachment(embed, chartBuffer); }
+      else { await this.send(embed); }
       return;
     }
-
-    const isBuy = signal.signal === 'BUY';
-    const emoji = isBuy ? '🟢' : '🔴';
-    const color = isBuy ? 0x00da7a : 0xda3a3a;
-    const dec = (signal.symbol?.includes('JPY') ? 3 : 2);
-
-    const entryPrice = brokerPos?.entryPrice ?? signal.entry;
-    const tsl = brokerPos?.sl ?? signal.sl;
-    const lot = brokerPos?.size ?? signal.lotSize ?? '-';
-
-    const entryStr = entryPrice != null ? entryPrice.toFixed(dec) : '-';
-    const tslStr = tsl != null ? tsl.toFixed(dec) : '-';
-
-    const title = `${emoji} #${round} ${signal.symbol} | ${isBuy ? 'BUY' : 'SELL'} Entry : ${entryStr} | TSL : ${tslStr} | Lot : ${lot}`;
 
     const fields = [];
     if (signal.indicators?.rsi != null || signal.indicators?.atr != null) {
@@ -122,27 +115,6 @@ class DiscordNotifier {
       await this.sendWithAttachment(embed, chartBuffer);
     } else {
       await this.send(embed);
-    }
-  }
-
-  async sendChartOnly(chartBuffer) {
-    if (!this.webhookUrl) return;
-    try {
-      const form = new FormData();
-      form.append('payload_json', JSON.stringify({
-        embeds: [{
-          color: 0x2b2d31,
-          image: { url: 'attachment://chart.png' },
-        }],
-      }));
-      form.append('file', chartBuffer, 'chart.png');
-      await fetch(this.webhookUrl, {
-        method: 'POST',
-        body: form,
-        headers: form.getHeaders(),
-      });
-    } catch (err) {
-      console.error('Discord chart send failed:', err.message);
     }
   }
 
