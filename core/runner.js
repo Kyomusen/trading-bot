@@ -235,7 +235,7 @@ class Runner {
         }
 
         console.log(`${symbol}: ${signal.signal}${brokerPos ? ' (has position)' : ''}`);
-        await this.discord.sendLiveTrade(signal, chartBuffer, openPositionsSummary, state.round, displayPos);
+        await this.discord.sendLiveTrade(signal, chartBuffer, openPositionsSummary, state.round, displayPos, currentPrice);
         results.push({ symbol, signal, success: true });
       } catch (err) {
         console.error(`Error processing ${symbol}:`, err.message);

@@ -46,17 +46,18 @@ class DiscordNotifier {
     }
   }
 
-  async sendLiveTrade(signal, chartBuffer = null, openPositions = null, round = 0, brokerPos = null) {
+  async sendLiveTrade(signal, chartBuffer = null, openPositions = null, round = 0, brokerPos = null, currentPrice = null) {
     const isBuy = signal.signal === 'BUY';
     const isNone = signal.signal === 'NONE';
     const emoji = isBuy ? '🟢' : isNone ? '⚪' : '🔴';
     const color = isBuy ? 0x00da7a : isNone ? 0x808080 : 0xda3a3a;
+    const dec = (signal.symbol?.includes('JPY') ? 3 : 2);
+    const priceStr = currentPrice != null ? ` @ ${currentPrice.toFixed(dec)}` : '';
 
-    const title = `${emoji} #${round} ${signal.symbol}${isNone ? '' : ` | ${isBuy ? 'BUY' : 'SELL'}`}`;
+    const title = `${emoji} #${round} ${signal.symbol}${priceStr}${isNone ? '' : ` | ${isBuy ? 'BUY' : 'SELL'}`}`;
 
     const fields = [];
     if (signal.indicators?.rsi != null || signal.indicators?.atr != null) {
-      const dec = (signal.symbol?.includes('JPY') ? 3 : 2);
       const rsiVal = signal.indicators?.rsi?.toFixed(1) ?? '-';
       const atrVal = signal.indicators?.atr?.toFixed(dec) ?? '-';
       fields.push({
