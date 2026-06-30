@@ -7,9 +7,7 @@ class MarketStream extends EventEmitter {
     this.cst = config.cst;
     this.securityToken = config.securityToken;
     this.demo = config.demo !== false;
-    this.wsUrl = this.demo
-      ? 'wss://demo-api-capital.backend-capital.com/'
-      : 'wss://api-capital.backend-capital.com/';
+    this.wsUrl = 'wss://api-streaming-capital.backend-capital.com/connect';
     this.ws = null;
     this.subscriptions = new Set();
     this.reconnectAttempts = 0;
