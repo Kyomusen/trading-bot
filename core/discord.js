@@ -54,15 +54,9 @@ class DiscordNotifier {
 
     const title = `${emoji} #${round} ${signal.symbol}${isNone ? '' : ` | ${isBuy ? 'BUY' : 'SELL'}`}`;
 
-    if (isNone) {
-      const embed = { title, color, timestamp: new Date().toISOString(), footer: { text: `บอทเทรด · ${signal.symbol}` } };
-      if (chartBuffer) { embed.image = { url: 'attachment://chart.png' }; await this.sendWithAttachment(embed, chartBuffer); }
-      else { await this.send(embed); }
-      return;
-    }
-
     const fields = [];
     if (signal.indicators?.rsi != null || signal.indicators?.atr != null) {
+      const dec = (signal.symbol?.includes('JPY') ? 3 : 2);
       const rsiVal = signal.indicators?.rsi?.toFixed(1) ?? '-';
       const atrVal = signal.indicators?.atr?.toFixed(dec) ?? '-';
       fields.push({
@@ -71,7 +65,7 @@ class DiscordNotifier {
         inline: true,
       });
     }
-    if (signal.reason) {
+    if (!isNone && signal.reason) {
       fields.push({
         name: '💡 เหตุผล',
         value: signal.reason,
