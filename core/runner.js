@@ -198,7 +198,7 @@ class Runner {
                     status: 'OPEN',
                   });
                   saveTrades(trades);
-                  state.lastSignals[symbol] = { signal: signal.signal, reason: signal.reason };
+                  state.lastSignals[symbol] = { signal: signal.signal, reason: signal.reason, time: Date.now() };
                   saveState(state);
                 }
             }
@@ -244,6 +244,8 @@ class Runner {
   _isDuplicateSignal(lastSignals, symbol, signal) {
     const last = lastSignals?.[symbol];
     if (!last) return false;
+    const hours = global.config?.duplicateHours ?? 6;
+    if (last.time && Date.now() - last.time > hours * 3600000) return false;
     return last.signal === signal.signal && last.reason === signal.reason;
   }
 
@@ -322,19 +324,21 @@ class Runner {
           Math.max(0.02, baseDist + (profitPct - baseActivate) * progFactor)
         );
 
+        const trailPrice = trailDist * sp.atrValue;
+        const newSl = sp.type === 'BUY'
+          ? sp.bestPrice - trailPrice
+          : sp.bestPrice + trailPrice;
+
         if (!sp.trailingActivated) {
-          // Activate trailing on Capital.com (convert from fixed SL to trailing stop)
-          const stopDistPrice = parseFloat((trailDist * sp.atrValue).toFixed(5));
-          await entry.broker.updatePositionTrailingStop(pos.id, stopDistPrice);
+          await entry.broker.updatePositionStopLevel(pos.id, newSl);
           sp.currentTrailDist = trailDist;
           sp.trailingActivated = true;
-          console.log(`[${symbol}] Trailing STOP ACTIVATED: dist=${trailDist.toFixed(4)} ATR (stopDistance=${stopDistPrice})`);
+          console.log(`[${symbol}] SL UPDATED (activate): dist=${trailDist.toFixed(4)} ATR → ${newSl.toFixed(2)}`);
           saveState(state);
         } else if (Math.abs(trailDist - (sp.currentTrailDist || 0)) > 0.001) {
-          const stopDistPrice = parseFloat((trailDist * sp.atrValue).toFixed(5));
-          await entry.broker.updatePositionTrailingStop(pos.id, stopDistPrice);
+          await entry.broker.updatePositionStopLevel(pos.id, newSl);
           sp.currentTrailDist = trailDist;
-          console.log(`[${symbol}] Trailing stop updated: dist=${trailDist.toFixed(4)} ATR (stopDistance=${stopDistPrice})`);
+          console.log(`[${symbol}] SL updated: dist=${trailDist.toFixed(4)} ATR → ${newSl.toFixed(2)}`);
           saveState(state);
         }
       }
@@ -512,26 +516,34 @@ class Runner {
   async _processStreamTrail(symbol, config, state, entry) {
     if (!this._pendingTrailOps.has(symbol)) return;
     const op = this._pendingTrailOps.get(symbol);
-    this._pendingTrailOps.delete(symbol);
 
     const sp = state.positions?.[symbol];
     if (!sp || !sp.dealId) return;
 
+    const atrVal = sp.atrValue;
+    if (!atrVal || atrVal <= 0) return;
+
     try {
-      const stopDistPrice = parseFloat((op.trailDist * sp.atrValue).toFixed(5));
-      await entry.broker.updatePositionTrailingStop(sp.dealId, stopDistPrice);
+      const trailPrice = op.trailDist * atrVal;
+      const newSl = sp.type === 'BUY'
+        ? sp.bestPrice - trailPrice
+        : sp.bestPrice + trailPrice;
+
+      await entry.broker.updatePositionStopLevel(sp.dealId, newSl);
+      this._pendingTrailOps.delete(symbol);
 
       if (op.action === 'activate') {
         sp.trailingActivated = true;
         sp.currentTrailDist = op.trailDist;
         saveState(state);
-        console.log(`[${symbol}] ⚡ TSL ACTIVATED @ ${op.trailDist.toFixed(4)} ATR (stopDist=${stopDistPrice})`);
+        console.log(`[${symbol}] ⚡ SL UPDATED (activate) @ ${op.trailDist.toFixed(4)} ATR → ${newSl.toFixed(2)}`);
       } else {
         sp.currentTrailDist = op.trailDist;
         saveState(state);
-        console.log(`[${symbol}] TSL updated ${op.trailDist.toFixed(4)} ATR (stopDist=${stopDistPrice})`);
+        console.log(`[${symbol}] SL updated ${op.trailDist.toFixed(4)} ATR → ${newSl.toFixed(2)}`);
       }
     } catch (err) {
+      this._pendingTrailOps.delete(symbol);
       console.error(`[${symbol}] Trail op failed: ${err.message}`);
     }
   }
@@ -541,7 +553,6 @@ class Runner {
       const shared = require('./strategy');
       const strategy = require(`../symbols/${symbol}/strategy`);
       const candles = await fetchCandlesCached(symbol, config.timeframe || 'H1', config);
-
       const signal = await strategy.analyzeFromData(config, candles);
 
       if (signal.signal !== 'NONE' && this._isDuplicateSignal(state.lastSignals, symbol, signal)) {
@@ -595,7 +606,7 @@ class Runner {
               status: 'OPEN',
             });
             saveTrades(trades);
-            state.lastSignals[symbol] = { signal: signal.signal, reason: signal.reason };
+            state.lastSignals[symbol] = { signal: signal.signal, reason: signal.reason, time: Date.now() };
             saveState(state);
 
             // Fetch dealId after placing
@@ -630,7 +641,9 @@ class Runner {
         openPositionsSummary[sym] = p;
       }
 
-      await this.discord.sendLiveTrade(signal, chartBuffer, openPositionsSummary, state.round, displayPos, currentPrice);
+      const discordPromise = this.discord.sendLiveTrade(signal, chartBuffer, openPositionsSummary, state.round, displayPos, currentPrice);
+      const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Discord timeout')), 10000));
+      await Promise.race([discordPromise, timeout]);
     } catch (err) {
       console.error(`[${symbol}] Signal analysis error:`, err.message);
     }

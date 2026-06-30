@@ -6,7 +6,6 @@ class MarketStream extends EventEmitter {
     super();
     this.cst = config.cst;
     this.securityToken = config.securityToken;
-    this.demo = config.demo !== false;
     this.wsUrl = 'wss://api-streaming-capital.backend-capital.com/connect';
     this.ws = null;
     this.subscriptions = new Set();
@@ -14,6 +13,7 @@ class MarketStream extends EventEmitter {
     this.maxReconnectAttempts = 50;
     this.reconnectBaseDelay = 1000;
     this.shouldReconnect = true;
+    this.pingTimer = null;
   }
 
   connect() {
@@ -27,11 +27,6 @@ class MarketStream extends EventEmitter {
 
       this.ws.on('open', () => {
         clearTimeout(timeout);
-        this.ws.send(JSON.stringify({
-          destination: 'ADMIN.LOGIN',
-          cst: this.cst,
-          securityToken: this.securityToken,
-        }));
         this.reconnectAttempts = 0;
         for (const epic of this.subscriptions) {
           this._sendSubscribe(epic);
@@ -45,12 +40,13 @@ class MarketStream extends EventEmitter {
           const msg = JSON.parse(raw.toString());
           this._handleMessage(msg);
         } catch {
-          // skip unparseable messages
+          // skip unparseable
         }
       });
 
       this.ws.on('close', () => {
         clearTimeout(timeout);
+        if (this.pingTimer) clearInterval(this.pingTimer);
         this.emit('disconnected');
         if (this.shouldReconnect) this._reconnect();
       });
@@ -58,7 +54,7 @@ class MarketStream extends EventEmitter {
       this.ws.on('error', (err) => {
         clearTimeout(timeout);
         this.emit('error', err);
-        reject(err);
+        if (this.reconnectAttempts === 0) reject(err);
       });
     });
   }
@@ -66,8 +62,11 @@ class MarketStream extends EventEmitter {
   _sendSubscribe(epic) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({
-        destination: `PRICES.${epic}`,
+        destination: 'marketData.subscribe',
         correlationId: epic,
+        cst: this.cst,
+        securityToken: this.securityToken,
+        payload: { epics: [epic] },
       }));
     }
   }
@@ -75,18 +74,66 @@ class MarketStream extends EventEmitter {
   subscribe(epic) {
     this.subscriptions.add(epic);
     this._sendSubscribe(epic);
+    this._startPing();
   }
 
   unsubscribe(epic) {
     this.subscriptions.delete(epic);
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        destination: 'marketData.unsubscribe',
+        correlationId: epic,
+        cst: this.cst,
+        securityToken: this.securityToken,
+        payload: { epics: [epic] },
+      }));
+    }
+  }
+
+  _startPing() {
+    if (this.pingTimer) return;
+    this.pingTimer = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({
+          destination: 'ping',
+          correlationId: 'ping',
+          cst: this.cst,
+          securityToken: this.securityToken,
+        }));
+      }
+    }, 300000); // ping every 5 min (< 10 min limit)
   }
 
   _handleMessage(msg) {
-    if (msg.destination === 'ADMIN.LOGIN') return;
-    if (!msg.destination || !msg.destination.startsWith('PRICES.')) return;
-    const epic = msg.destination.replace('PRICES.', '');
-    this.emit('price', epic, msg.payload || msg);
-    this.emit(`price:${epic}`, msg.payload || msg);
+    if (msg.destination === 'ping') return;
+
+    // Subscription confirmation
+    if (msg.destination === 'marketData.subscribe') {
+      const subs = msg.payload?.subscriptions || {};
+      for (const [epic, status] of Object.entries(subs)) {
+        if (status === 'PROCESSED') {
+          this.emit(`subscribed:${epic}`);
+        }
+      }
+      return;
+    }
+
+    if (msg.destination === 'marketData.unsubscribe') return;
+
+    // Price update
+    if (msg.destination === 'quote') {
+      const epic = msg.payload?.epic;
+      if (!epic) return;
+      this.emit('price', epic, msg.payload);
+      this.emit(`price:${epic}`, msg.payload);
+      return;
+    }
+
+    // OHLC update
+    if (msg.destination === 'ohlc.event') {
+      this.emit('ohlc', msg.payload);
+      this.emit(`ohlc:${msg.payload?.epic}`, msg.payload);
+    }
   }
 
   _reconnect() {
@@ -105,6 +152,7 @@ class MarketStream extends EventEmitter {
 
   disconnect() {
     this.shouldReconnect = false;
+    if (this.pingTimer) clearInterval(this.pingTimer);
     if (this.ws) {
       this.ws.close();
       this.ws = null;

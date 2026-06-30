@@ -23,10 +23,11 @@ class CapitalBroker extends BaseBroker {
     this.securityToken = null;
     this.accountId = null;
     this.dealingRuleCache = new Map();
+    this._reconnecting = false;
   }
 
   async connect() {
-    const res = await fetch(`${this.baseUrl}/api/v1/session`, {
+    const res = await this._request(`${this.baseUrl}/api/v1/session`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -46,7 +47,7 @@ class CapitalBroker extends BaseBroker {
     this.cst = res.headers.get('cst');
     this.securityToken = res.headers.get('x-security-token');
 
-    const accountRes = await fetch(`${this.baseUrl}/api/v1/accounts`, {
+    const accountRes = await this._request(`${this.baseUrl}/api/v1/accounts`, {
       headers: this._authHeaders(),
     });
     const accounts = await accountRes.json();
@@ -57,10 +58,10 @@ class CapitalBroker extends BaseBroker {
 
   async disconnect() {
     if (this.cst && this.securityToken) {
-      await fetch(`${this.baseUrl}/api/v1/session`, {
+      await this._request(`${this.baseUrl}/api/v1/session`, {
         method: 'DELETE',
         headers: this._authHeaders(),
-      });
+      }, 0);
     }
     this.isConnected = false;
     this.cst = null;
@@ -75,10 +76,26 @@ class CapitalBroker extends BaseBroker {
     };
   }
 
+  async _request(url, options = {}, retries = 1) {
+    const res = await fetch(url, options);
+    if (res.status === 401 && retries > 0 && !this._reconnecting) {
+      this._reconnecting = true;
+      try {
+        console.log('[Capital] Session expired, reconnecting...');
+        await this.connect();
+        const newOpts = { ...options, headers: { ...this._authHeaders(), ...options.headers } };
+        return await fetch(url, newOpts);
+      } finally {
+        this._reconnecting = false;
+      }
+    }
+    return res;
+  }
+
   async getDealingRules(symbol) {
     const epic = resolveEpic(symbol);
     if (this.dealingRuleCache.has(epic)) return this.dealingRuleCache.get(epic);
-    const res = await fetch(`${this.baseUrl}/api/v1/markets/${epic}`, {
+    const res = await this._request(`${this.baseUrl}/api/v1/markets/${epic}`, {
       headers: this._authHeaders(),
     });
     if (!res.ok) throw new Error(`Failed to get market info for ${epic}: ${res.status}`);
@@ -106,7 +123,7 @@ class CapitalBroker extends BaseBroker {
   }
 
   async getBalance() {
-    const res = await fetch(`${this.baseUrl}/api/v1/accounts`, {
+    const res = await this._request(`${this.baseUrl}/api/v1/accounts`, {
       headers: this._authHeaders(),
     });
     if (!res.ok) throw new Error(`Failed to get accounts: ${res.status}`);
@@ -119,7 +136,7 @@ class CapitalBroker extends BaseBroker {
   async getCandles(symbol, timeframe, limit = 100) {
     const epic = resolveEpic(symbol);
     const resolution = this._mapTimeframe(timeframe);
-    const res = await fetch(`${this.baseUrl}/api/v1/prices/${epic}?resolution=${resolution}&max=${limit}`, {
+    const res = await this._request(`${this.baseUrl}/api/v1/prices/${epic}?resolution=${resolution}&max=${limit}`, {
       headers: this._authHeaders(),
     });
 
@@ -172,7 +189,7 @@ class CapitalBroker extends BaseBroker {
       body.stopLevel = sl;
     }
 
-    const res = await fetch(`${this.baseUrl}/api/v1/positions`, {
+    const res = await this._request(`${this.baseUrl}/api/v1/positions`, {
       method: 'POST',
       headers: this._authHeaders(),
       body: JSON.stringify(body),
@@ -187,7 +204,7 @@ class CapitalBroker extends BaseBroker {
   }
 
   async updatePositionTrailingStop(dealId, stopDistance) {
-    const res = await fetch(`${this.baseUrl}/api/v1/positions/${dealId}`, {
+    const res = await this._request(`${this.baseUrl}/api/v1/positions/${dealId}`, {
       method: 'PUT',
       headers: this._authHeaders(),
       body: JSON.stringify({
@@ -198,6 +215,20 @@ class CapitalBroker extends BaseBroker {
     if (!res.ok) {
       const err = await res.text();
       throw new Error(`Update trailing stop failed: ${res.status} - ${err}`);
+    }
+    return res.json();
+  }
+
+  async updatePositionStopLevel(dealId, stopLevel) {
+    const sl = parseFloat(stopLevel.toFixed(2));
+    const res = await this._request(`${this.baseUrl}/api/v1/positions/${dealId}`, {
+      method: 'PUT',
+      headers: this._authHeaders(),
+      body: JSON.stringify({ stopLevel: sl }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Update stop level failed: ${res.status} - ${err}`);
     }
     return res.json();
   }
@@ -217,7 +248,7 @@ class CapitalBroker extends BaseBroker {
   }
 
   async getOpenPositions(symbol) {
-    const res = await fetch(`${this.baseUrl}/api/v1/positions`, {
+    const res = await this._request(`${this.baseUrl}/api/v1/positions`, {
       headers: this._authHeaders(),
     });
 
@@ -247,7 +278,7 @@ class CapitalBroker extends BaseBroker {
     if (!pos) throw new Error(`Position ${positionId} not found`);
 
     const direction = pos.type === 'BUY' ? 'SELL' : 'BUY';
-    const res = await fetch(`${this.baseUrl}/api/v1/positions`, {
+    const res = await this._request(`${this.baseUrl}/api/v1/positions`, {
       method: 'DELETE',
       headers: this._authHeaders(),
       body: JSON.stringify({
@@ -265,14 +296,14 @@ class CapitalBroker extends BaseBroker {
   }
 
   async getAccountInfo() {
-    const res = await fetch(`${this.baseUrl}/api/v1/accounts`, {
+    const res = await this._request(`${this.baseUrl}/api/v1/accounts`, {
       headers: this._authHeaders(),
     });
     return res.json();
   }
 
   async getSymbolInfo(symbol) {
-    const res = await fetch(`${this.baseUrl}/api/v1/markets/${symbol}`, {
+    const res = await this._request(`${this.baseUrl}/api/v1/markets/${symbol}`, {
       headers: this._authHeaders(),
     });
     return res.json();
