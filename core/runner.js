@@ -356,7 +356,6 @@ class Runner {
     if (!state.lastSignals) state.lastSignals = {};
     if (!state.positions) state.positions = {};
     if (!state.consecutiveLosses) state.consecutiveLosses = {};
-    this._pendingTrailOps = new Map();
 
     const MarketStream = require('./marketStream');
     const timers = [];
@@ -467,7 +466,7 @@ class Runner {
         ? this._getH1Start(new Date(candles[candles.length - 1].time))
         : this._getH1Start(new Date());
 
-      // Price tick → update bestPrice, queue trail operations
+      // Price tick → update bestPrice only (trail at H1 close only)
       let tickCount = 0;
       stream.on(`price:${epic}`, (payload) => {
         const bid = payload?.closePrice?.bid ?? payload?.bid ?? null;
@@ -479,13 +478,7 @@ class Runner {
         this._manageStreamPosition(symbol, config, state, bid);
       });
 
-      // Process pending trail operations every 5s
-      const trailTimer = setInterval(() => {
-        this._processStreamTrail(symbol, config, state, entry).catch(() => {});
-      }, 5000);
-      timers.push(trailTimer);
-
-      // Check for new H1 candle every 30s → run signal analysis
+      // Check for new H1 candle every 30s → run signal analysis + trail
       const candleTimer = setInterval(() => {
         const now = new Date();
         const h1Start = this._getH1Start(now);
@@ -493,6 +486,7 @@ class Runner {
         lastH1Time = h1Start;
         console.log(`[${symbol}] New H1 candle`);
         this._handleStreamSignal(symbol, config, state, entry, broker).catch(() => {});
+        this._trailOnH1Close(symbol, config, state, entry).catch(() => {});
       }, 30000);
       timers.push(candleTimer);
 
@@ -535,6 +529,12 @@ class Runner {
 
     if (sp.type === 'BUY' && bid > sp.bestPrice) sp.bestPrice = bid;
     else if (sp.type === 'SELL' && bid < sp.bestPrice) sp.bestPrice = bid;
+  }
+
+  async _trailOnH1Close(symbol, config, state, entry) {
+    const sp = state.positions?.[symbol];
+    if (!sp || !sp.atrValue || sp.atrValue <= 0) return;
+    if (!config.trailing || !sp.dealId) return;
 
     const profitPct = sp.type === 'BUY'
       ? (sp.bestPrice - sp.entry) / sp.atrValue
@@ -552,50 +552,32 @@ class Runner {
       Math.max(0.02, baseDist + (profitPct - baseActivate) * progFactor)
     );
 
-    if (!sp.trailingActivated) {
-      if (!this._pendingTrailOps.has(symbol)) {
-        this._pendingTrailOps.set(symbol, { action: 'activate', trailDist });
-      }
-    } else if (Math.abs(trailDist - (sp.currentTrailDist || 0)) > 0.001) {
-      const prev = this._pendingTrailOps.get(symbol);
-      if (!prev || Math.abs(trailDist - prev.trailDist) > 0.001) {
-        this._pendingTrailOps.set(symbol, { action: 'update', trailDist });
-      }
+    const trailPrice = trailDist * sp.atrValue;
+    const lockSl = sp.type === 'BUY'
+      ? sp.entry + 0.05 * sp.atrValue
+      : sp.entry - 0.05 * sp.atrValue;
+
+    let newSl;
+    if (sp.type === 'BUY') {
+      newSl = Math.max(sp.sl, sp.bestPrice - trailPrice, lockSl);
+    } else {
+      newSl = Math.min(sp.sl, sp.bestPrice + trailPrice, lockSl);
     }
-  }
-
-  async _processStreamTrail(symbol, config, state, entry) {
-    if (!this._pendingTrailOps.has(symbol)) return;
-    const op = this._pendingTrailOps.get(symbol);
-
-    const sp = state.positions?.[symbol];
-    if (!sp || !sp.dealId) return;
-
-    const atrVal = sp.atrValue;
-    if (!atrVal || atrVal <= 0) return;
 
     try {
-      const trailPrice = op.trailDist * atrVal;
-      const newSl = sp.type === 'BUY'
-        ? sp.bestPrice - trailPrice
-        : sp.bestPrice + trailPrice;
-
       await entry.broker.updatePositionStopLevel(sp.dealId, newSl);
-      this._pendingTrailOps.delete(symbol);
+      sp.sl = newSl;
 
-      if (op.action === 'activate') {
+      if (!sp.trailingActivated) {
         sp.trailingActivated = true;
-        sp.currentTrailDist = op.trailDist;
-        saveState(state);
-        console.log(`[${symbol}] ⚡ SL UPDATED (activate) @ ${op.trailDist.toFixed(4)} ATR → ${newSl.toFixed(2)}`);
+        console.log(`[${symbol}] ⚡ TSL activated @ ${trailDist.toFixed(4)} ATR → ${newSl.toFixed(2)}`);
       } else {
-        sp.currentTrailDist = op.trailDist;
-        saveState(state);
-        console.log(`[${symbol}] SL updated ${op.trailDist.toFixed(4)} ATR → ${newSl.toFixed(2)}`);
+        console.log(`[${symbol}] SL updated ${trailDist.toFixed(4)} ATR → ${newSl.toFixed(2)}`);
       }
+      sp.currentTrailDist = trailDist;
+      saveState(state);
     } catch (err) {
-      this._pendingTrailOps.delete(symbol);
-      console.error(`[${symbol}] Trail op failed: ${err.message}`);
+      console.error(`[${symbol}] Trail on H1 close failed: ${err.message}`);
     }
   }
 
