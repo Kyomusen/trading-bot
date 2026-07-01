@@ -670,7 +670,12 @@ class Runner {
         }
       }
 
-      // Discord notification
+      // Discord notification — skip NONE when no position
+      const hasOpenPosition = state.positions?.[symbol]?.dealId != null;
+      if (signal.signal === 'NONE' && !hasOpenPosition && !hasPos) {
+        console.log(`[${symbol}] Signal: NONE, no position — skip Discord`);
+        return;
+      }
       const ind = shared.getIndicators(candles);
       const chartCandles = candles.slice(-DISPLAY_LIMIT);
       const brokerPos = hasPos ? await broker.getOpenPositions(symbol).catch(() => []) : [];
