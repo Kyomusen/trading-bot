@@ -84,6 +84,10 @@ class CapitalBroker extends BaseBroker {
         try {
           console.log('[Capital] Session expired, reconnecting...');
           await this.connect();
+        } catch (e) {
+          console.error('[Capital] Reconnect failed:', e.message);
+          this._reconnecting = false;
+          return res;
         } finally {
           this._reconnecting = false;
         }
