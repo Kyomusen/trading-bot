@@ -98,9 +98,9 @@ class Runner {
 
   async runStream() {
     const state = loadState();
-    state.round = (state.round || 0) + 1;
+    if (!state.round) state.round = 0;
     saveState(state);
-    console.log(`\n🤖 Streaming Mode #${state.round}`);
+    console.log(`\n🤖 Streaming Mode`);
     if (!state.lastSignals) state.lastSignals = {};
     if (!state.positions) state.positions = {};
     if (!state.consecutiveLosses) state.consecutiveLosses = {};
@@ -455,8 +455,10 @@ class Runner {
         }
       }
 
-      // Discord notification — always send (every H1 close)
-      if (signal.signal === 'NONE') console.log(`[${symbol}] Signal: NONE — sending Discord`);
+      // Discord notification — count round as each H1 close, send always
+      state.round++;
+      saveState(state);
+      if (signal.signal === 'NONE') console.log(`[${symbol}] Signal: NONE — sending Discord #${state.round}`);
       const ind = shared.getIndicators(candles);
       const chartCandles = candles.slice(-DISPLAY_LIMIT);
       const brokerPos = hasPos ? await broker.getOpenPositions(symbol).catch(() => []) : [];
