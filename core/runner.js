@@ -287,11 +287,18 @@ class Runner {
         lastH1Time = h1Start;
         console.log(`[${symbol}] New H1 candle`);
 
-        // Finalize completed H1 candle from local builder
+        // Only push curCandle to runningCandles if it's from a completed H1
+        // (curH1 < h1Start). This avoids duplicating a candle that the tick
+        // handler already pushed when the H1 boundary was crossed.
         if (curCandle) {
-          runningCandles.push(curCandle);
-          runningCandles.splice(0, runningCandles.length - 720);
-          curCandle = null;
+          const curH1 = this._getH1Start(new Date(curCandle.time));
+          if (curH1 < h1Start) {
+            runningCandles.push(curCandle);
+            runningCandles.splice(0, runningCandles.length - 720);
+            curCandle = null;
+          }
+          // If curH1 >= h1Start then curCandle is already the in-progress
+          // candle for the current H1 → keep it, next tick continues building.
         }
 
         this._handleStreamSignal(symbol, config, state, entry, broker, runningCandles).catch(() => {});
