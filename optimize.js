@@ -147,9 +147,14 @@ function run(opts) {
   return { trades: closed.length, wr, pf, netPnl, mdd, score, retPct, final: balance };
 }
 
+function fmt(r) {
+  return 'Trades:' + String(r.trades).padStart(5) + ' | WR:' + r.wr.toFixed(1)+'%' + ' | PF:' + r.pf.toFixed(2) + ' | PnL:' + r.netPnl.toFixed(0) + ' | DD:' + r.mdd.toFixed(1)+'%' + ' | Score:' + r.score.toFixed(0);
+}
+
 const results = [];
 
-console.log('=== Phase 1: Setup Types ===');
+console.log('\n=== Phase 1: Best Setups ===');
+const bestSetups = ['trend_buy', 'trend_sell', 'pullback_buy', 'pullback_sell'];
 for (const setups of [
   ['momentum_buy', 'momentum_sell'],
   ['trend_buy', 'trend_sell'],
@@ -159,8 +164,58 @@ for (const setups of [
   ['momentum_buy', 'momentum_sell', 'pullback_buy', 'pullback_sell'],
   ['trend_buy', 'trend_sell', 'momentum_buy', 'momentum_sell', 'pullback_buy', 'pullback_sell'],
 ]) {
-  const r = run({ setups, trendMode: 'AND', atrSl: 0.8, riskPercent: 1 });
-  results.push({ ...r, label: 'setups=' + setups.join('+')[0] });
-  const label = setups.join('+').substring(0, 60);
-  console.log(label.padEnd(62), '| Trades:', String(r.trades).padStart(5), '| WR:', r.wr.toFixed(1)+'%', '| PF:', r.pf.toFixed(2), '| PnL:', r.netPnl.toFixed(0), '| DD:', r.mdd.toFixed(1)+'%', '| Score:', r.score.toFixed(0));
+  const r = run({ setups, trendMode: 'AND', atrSl: 1.0, riskPercent: 1 });
+  results.push({ ...r, label: 'setups=' + setups.join('+')[0], setups });
+  const label = setups.join('+').substring(0, 62);
+  console.log(label, '|', fmt(r));
 }
+results.sort((a, b) => b.score - a.score);
+const topSetups = results[0].setups;
+console.log(`\nBest setups: ${topSetups.join(', ')}`);
+
+console.log('\n=== Phase 2: atrSl (Fixed SL) ===');
+const atrSlResults = [];
+for (const v of [0.5, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0, 4.0]) {
+  const r = run({ setups: topSetups, trendMode: 'AND', atrSl: v, riskPercent: 1 });
+  atrSlResults.push({ ...r, atrSl: v });
+  console.log('atrSl:', String(v).padEnd(5), '|', fmt(r));
+}
+
+console.log('\n=== Phase 3: trailingActivate ===');
+const taResults = [];
+const bestAtrSl = atrSlResults.sort((a, b) => b.score - a.score)[0].atrSl;
+for (const v of [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5]) {
+  const r = run({ setups: topSetups, trendMode: 'AND', atrSl: bestAtrSl, trailingActivate: v, riskPercent: 1 });
+  taResults.push({ ...r, trailingActivate: v });
+  console.log('trailingActivate:', v.toFixed(2).padStart(7), '|', fmt(r));
+}
+
+console.log('\n=== Phase 4: trailingDistance ===');
+const tdResults = [];
+const bestTa = taResults.sort((a, b) => b.score - a.score)[0].trailingActivate;
+for (const v of [0.02, 0.03, 0.05, 0.08, 0.1, 0.12, 0.15, 0.2]) {
+  const r = run({ setups: topSetups, trendMode: 'AND', atrSl: bestAtrSl, trailingActivate: bestTa, trailingDistance: v, riskPercent: 1 });
+  tdResults.push({ ...r, trailingDistance: v });
+  console.log('trailingDistance:', v.toFixed(2).padStart(7), '|', fmt(r));
+}
+
+console.log('\n=== Phase 5: trailingDistanceMax + Progressive ===');
+for (const maxD of [0.5, 1.0, 2.0, 3.0, 5.0]) {
+  for (const prog of [0, 0.01, 0.02, 0.05]) {
+    const r = run({ setups: topSetups, trendMode: 'AND', atrSl: bestAtrSl, trailingActivate: bestTa, trailingDistance: 0.03, trailingDistanceMax: maxD, trailingProgressive: prog, riskPercent: 1 });
+    results.push({ ...r, label: `maxD=${maxD} prog=${prog}` });
+    console.log(`maxD:${String(maxD).padEnd(5)} prog:${String(prog).padEnd(5)}`, '|', fmt(r));
+  }
+}
+
+console.log('\n=== FINAL: Best Parameters ===');
+const allSorted = results.concat(atrSlResults, taResults, tdResults).sort((a, b) => b.score - a.score);
+const best = allSorted[0];
+console.log(`Best score: ${best.score.toFixed(0)}`);
+console.log(`Setups: ${topSetups.join(', ')}`);
+console.log(`atrSl: ${bestAtrSl}`);
+console.log(`trailingActivate: ${bestTa}`);
+const bestTd = tdResults.sort((a, b) => b.score - a.score)[0];
+console.log(`trailingDistance: ${bestTd.trailingDistance}`);
+console.log('');
+console.log(`Result: ${best.trades} trades, WR ${best.wr.toFixed(1)}%, PF ${best.pf.toFixed(2)}, PnL $${best.netPnl.toFixed(2)}, DD ${best.mdd.toFixed(1)}%`);

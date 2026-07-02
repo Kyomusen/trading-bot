@@ -93,6 +93,7 @@ class Runner {
     console.log(`\n🤖 Live Round #${state.round}`);
     if (!state.lastSignals) state.lastSignals = {};
     if (!state.positions) state.positions = {};
+    if (!state.consecutiveLosses) state.consecutiveLosses = {};
 
     const results = [];
     for (const [symbol, entry] of this.brokers) {
@@ -122,7 +123,7 @@ class Runner {
 
         const signal = await strategy.analyzeFromData(config, candles);
 
-        if (signal.signal !== 'NONE' && this._isDuplicateSignal(state.lastSignals, symbol, signal)) {
+        if (signal.signal !== 'NONE' && this._isDuplicateSignal(state.lastSignals, symbol, signal, config)) {
           console.log(`[${symbol}] Duplicate signal: ${signal.signal} ${signal.reason}, skipping`);
           signal.signal = 'NONE';
           signal.reason = `Duplicate: ${signal.reason}`;
@@ -139,13 +140,14 @@ class Runner {
             const balance = await broker.getBalance();
             const slDist = Math.abs(signal.entry - signal.sl);
             const slPips = slDist / pipToPrice(1, symbol);
-            const pvpl = pipValuePerLot(symbol);
-            const riskAmt = balance * (config.riskPercent / 100);
             const dr = CapitalBroker.loadDealingRulesCache(symbol);
             const brokerMax = dr ? dr.maxDealSize : 999999;
-            let size = Math.max(0.01, riskAmt / (slPips * pvpl));
 
-            size = Math.min(size, config.maxLot || 5, brokerMax);
+            const trades = loadTrades();
+            const dirMul = this._calcAdaptiveMultiplier(trades, signal.signal, config);
+            const consecutiveLosses = state.consecutiveLosses[symbol] || 0;
+            let size = this._calcSize(symbol, balance, dirMul, consecutiveLosses, config, slPips, brokerMax);
+
             if (size <= 0) {
               console.log(`[${symbol}] Calculated size is 0, skipping`);
             } else {
@@ -153,7 +155,7 @@ class Runner {
               let finalSize = validation.valid ? validation.size : 0;
 
               if (!validation.valid && size < validation.min) {
-                const minRiskPct = (validation.min * slPips * pvpl) / balance * 100;
+                const minRiskPct = (validation.min * slPips * pipValuePerLot(symbol)) / balance * 100;
                 if (minRiskPct <= (config.riskPercent || 1) * 3) {
                   finalSize = validation.min;
                   console.log(`[${symbol}] Size ${size.toFixed(4)} < min ${validation.min}, using min (risk ${minRiskPct.toFixed(1)}%)`);
@@ -167,40 +169,42 @@ class Runner {
                 console.log(`[${symbol}] Size ${size.toFixed(4)} > max ${validation.max}, capping`);
               }
 
-                if (finalSize > 0) {
-                  await broker.placeOrder(symbol, signal.signal, finalSize, signal.sl, null, '');
-                  console.log(`[${symbol}] Order placed: ${signal.signal} size=${finalSize}`);
-                  signal.lotSize = finalSize;
-                  orderPlaced = true;
+              if (finalSize > 0) {
+                await broker.placeOrder(symbol, signal.signal, finalSize, signal.sl, null, '');
+                console.log(`[${symbol}] Order placed: ${signal.signal} size=${finalSize}`);
+                signal.lotSize = finalSize;
+                orderPlaced = true;
 
-                  state.positions[symbol] = {
-                    type: signal.signal,
-                    entry: signal.entry,
-                    sl: signal.sl,
-                    size: finalSize,
-                    atrValue: signal.indicators?.atr || 0,
-                    bestPrice: signal.entry,
-                    currentTrailDist: null,
-                    trailingActivated: false,
-                  };
-                  saveState(state);
+                state.positions[symbol] = {
+                  type: signal.signal,
+                  entry: signal.entry,
+                  sl: signal.sl,
+                  size: finalSize,
+                  atrValue: signal.indicators?.atr || 0,
+                  bestPrice: signal.entry,
+                  currentTrailDist: null,
+                  trailingActivated: false,
+                };
+                saveState(state);
 
-                  const trades = loadTrades();
-                  trades.push({
-                    round: state.round,
-                    time: new Date().toISOString(),
-                    symbol,
-                    action: signal.signal,
-                    entry: signal.entry,
-                    sl: signal.sl,
-                    size: finalSize,
-                    setup: signal.reason,
-                    status: 'OPEN',
-                  });
-                  saveTrades(trades);
-                  state.lastSignals[symbol] = { signal: signal.signal, reason: signal.reason, time: Date.now() };
-                  saveState(state);
-                }
+                const allTrades = loadTrades();
+                allTrades.push({
+                  round: state.round,
+                  time: new Date().toISOString(),
+                  symbol,
+                  action: signal.signal,
+                  type: signal.signal,
+                  entry: signal.entry,
+                  sl: signal.sl,
+                  size: finalSize,
+                  setup: signal.reason,
+                  status: 'OPEN',
+                  pnl: 0,
+                });
+                saveTrades(allTrades);
+                state.lastSignals[symbol] = { signal: signal.signal, reason: signal.reason, time: Date.now() };
+                saveState(state);
+              }
             }
           }
         }
@@ -241,16 +245,16 @@ class Runner {
     return results;
   }
 
-  _isDuplicateSignal(lastSignals, symbol, signal) {
+  _isDuplicateSignal(lastSignals, symbol, signal, config = {}) {
     const last = lastSignals?.[symbol];
     if (!last) return false;
     if (!last.time) return false;
-    const hours = global.config?.duplicateHours ?? 6;
+    const hours = config.duplicateHours ?? 6;
     if (Date.now() - last.time > hours * 3600000) return false;
     return last.signal === signal.signal && last.reason === signal.reason;
   }
 
-  _calcSize(symbol, balance, dirMul, consecutiveLosses, config, slPips) {
+  _calcSize(symbol, balance, dirMul, consecutiveLosses, config, slPips, brokerMax = 999999) {
     const pvpl = pipValuePerLot(symbol);
     if (!slPips || slPips <= 0) return symbol.includes('XAU') ? 0.0001 : 0.01;
     let riskBase = balance * dirMul;
@@ -266,7 +270,10 @@ class Runner {
       lots *= factor;
     }
 
-    const maxLot = config.dynamicMaxLot ? Math.max(0.01, balance / 50000) : (config.maxLot ?? 5);
+    const maxLot = Math.min(
+      config.dynamicMaxLot ? Math.max(0.01, balance / 50000) : (config.maxLot ?? 5),
+      brokerMax
+    );
     const minLot = symbol.includes('XAU') ? 0.0001 : 0.01;
     const size = Math.max(minLot, Math.min(maxLot, lots));
     const riskPct = (size * slPips * pvpl) / riskBase * 100;
@@ -277,7 +284,7 @@ class Runner {
   _calcAdaptiveMultiplier(tradeHistory, direction, config) {
     const adCfg = config.adaptiveSizing || {};
     if (!adCfg.enabled) return 1;
-    const dirTrades = tradeHistory.filter(t => t.type === direction);
+    const dirTrades = tradeHistory.filter(t => (t.type || t.action) === direction);
     if (dirTrades.length < 5) return 1;
     const lookback = adCfg.lookback ?? 50;
     const recent = dirTrades.slice(-lookback);
@@ -298,6 +305,26 @@ class Runner {
     try {
       const positions = await entry.broker.getOpenPositions(symbol);
       if (positions.length === 0) {
+        // Position closed by broker — track PnL and consecutive losses
+        const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
+        if (currentPrice != null && sp.size) {
+          const pvpl = pipValuePerLot(symbol);
+          const pips = (sp.type === 'BUY' ? currentPrice - sp.entry : sp.entry - currentPrice) / pipToPrice(1, symbol);
+          const pnl = pips * sp.size * pvpl;
+
+          if (!state.consecutiveLosses) state.consecutiveLosses = {};
+          state.consecutiveLosses[symbol] = pnl < 0 ? (state.consecutiveLosses[symbol] || 0) + 1 : 0;
+
+          const trades = loadTrades();
+          const lastTrade = [...trades].reverse().find(t => t.symbol === symbol && t.status === 'OPEN');
+          if (lastTrade) {
+            lastTrade.status = 'CLOSED';
+            lastTrade.closeTime = new Date().toISOString();
+            lastTrade.pnl = parseFloat(pnl.toFixed(2));
+          }
+          saveTrades(trades);
+        }
+
         delete state.positions[symbol];
         saveState(state);
         return;
@@ -407,21 +434,23 @@ class Runner {
           saveState(state);
         }
         // Ensure trade history has an OPEN record for this position
-        const trades = loadTrades();
-        const hasOpen = trades.some(t => t.symbol === symbol && t.status === 'OPEN');
+        const allTrades = loadTrades();
+        const hasOpen = allTrades.some(t => t.symbol === symbol && t.status === 'OPEN');
         if (!hasOpen) {
-          trades.push({
+          allTrades.push({
             round: state.round,
             time: new Date().toISOString(),
             symbol,
             action: pos.type,
+            type: pos.type,
             entry: pos.entryPrice,
             sl: pos.sl,
             size: pos.size,
             setup: 'restored',
             status: 'OPEN',
+            pnl: 0,
           });
-          saveTrades(trades);
+          saveTrades(allTrades);
         }
       } else if (state.positions?.[symbol]) {
         // Position was stopped out while bot was down
@@ -429,12 +458,28 @@ class Runner {
         const closed = state.positions[symbol];
         delete state.positions[symbol];
         saveState(state);
+
+        // Estimate PnL from latest candle
+        let pnl = 0;
+        const lastCandle = candles.length > 0 ? candles[candles.length - 1] : null;
+        if (lastCandle && closed.size) {
+          const pvpl = pipValuePerLot(symbol);
+          pnl = closed.type === 'BUY'
+            ? (lastCandle.close - closed.entry) * closed.size * pvpl
+            : (closed.entry - lastCandle.close) * closed.size * pvpl;
+        }
+
+        if (!state.consecutiveLosses) state.consecutiveLosses = {};
+        state.consecutiveLosses[symbol] = pnl < 0 ? (state.consecutiveLosses[symbol] || 0) + 1 : 0;
+        saveState(state);
+
         // Record the close in trade history
         const trades = loadTrades();
         const openTrade = [...trades].reverse().find(t => t.symbol === symbol && t.status === 'OPEN');
         if (openTrade) {
           openTrade.status = 'CLOSED';
           openTrade.closeTime = new Date().toISOString();
+          openTrade.pnl = parseFloat(pnl.toFixed(2));
         } else {
           trades.push({
             round: state.round,
@@ -447,6 +492,7 @@ class Runner {
             setup: 'restored',
             status: 'CLOSED',
             closeTime: new Date().toISOString(),
+            pnl: parseFloat(pnl.toFixed(2)),
           });
         }
         saveTrades(trades);
@@ -466,11 +512,45 @@ class Runner {
         ? this._getH1Start(new Date(candles[candles.length - 1].time))
         : this._getH1Start(new Date());
 
-      // Price tick → update bestPrice only (trail at H1 close only)
+      // Local candle builder from WebSocket ticks
+      const runningCandles = [...candles];
+      let curCandle = null;
+
+      // Price tick → build local candle + update bestPrice (trail at H1 close only)
       let tickCount = 0;
       stream.on(`price:${epic}`, (payload) => {
         const bid = payload?.closePrice?.bid ?? payload?.bid ?? null;
         if (bid == null) return;
+
+        if (!curCandle) {
+          const h1Start = this._getH1Start(new Date());
+          curCandle = {
+            time: new Date(h1Start).toISOString(),
+            open: bid,
+            high: bid,
+            low: bid,
+            close: bid,
+          };
+        } else {
+          const candleH1 = this._getH1Start(new Date(curCandle.time));
+          const nowH1 = this._getH1Start(new Date());
+          if (nowH1 > candleH1) {
+            runningCandles.push(curCandle);
+            runningCandles.splice(0, runningCandles.length - 720);
+            curCandle = {
+              time: new Date(nowH1).toISOString(),
+              open: bid,
+              high: bid,
+              low: bid,
+              close: bid,
+            };
+          } else {
+            curCandle.high = Math.max(curCandle.high, bid);
+            curCandle.low = Math.min(curCandle.low, bid);
+            curCandle.close = bid;
+          }
+        }
+
         tickCount++;
         if (tickCount % 100 === 0) {
           console.log(`[${symbol}] Price: ${bid} (ticks: ${tickCount})`);
@@ -485,7 +565,15 @@ class Runner {
         if (h1Start <= lastH1Time) return;
         lastH1Time = h1Start;
         console.log(`[${symbol}] New H1 candle`);
-        this._handleStreamSignal(symbol, config, state, entry, broker).catch(() => {});
+
+        // Finalize completed H1 candle from local builder
+        if (curCandle) {
+          runningCandles.push(curCandle);
+          runningCandles.splice(0, runningCandles.length - 720);
+          curCandle = null;
+        }
+
+        this._handleStreamSignal(symbol, config, state, entry, broker, runningCandles).catch(() => {});
         this._trailOnH1Close(symbol, config, state, entry).catch(() => {});
       }, 30000);
       timers.push(candleTimer);
@@ -561,7 +649,7 @@ class Runner {
     if (sp.type === 'BUY') {
       newSl = Math.max(sp.sl, sp.bestPrice - trailPrice, lockSl);
     } else {
-      newSl = Math.min(sp.sl, sp.bestPrice + trailPrice, lockSl);
+      newSl = Math.min(sp.sl, Math.max(sp.bestPrice + trailPrice, lockSl));
     }
 
     try {
@@ -581,14 +669,14 @@ class Runner {
     }
   }
 
-  async _handleStreamSignal(symbol, config, state, entry, broker) {
+  async _handleStreamSignal(symbol, config, state, entry, broker, streamCandles = null) {
     try {
       const shared = require('./strategy');
       const strategy = require(`../symbols/${symbol}/strategy`);
-      const candles = await fetchCandlesCached(symbol, config.timeframe || 'H1', config);
+      const candles = streamCandles || (await fetchCandlesCached(symbol, config.timeframe || 'H1', config));
       const signal = await strategy.analyzeFromData(config, candles);
 
-      if (signal.signal !== 'NONE' && this._isDuplicateSignal(state.lastSignals, symbol, signal)) {
+      if (signal.signal !== 'NONE' && this._isDuplicateSignal(state.lastSignals, symbol, signal, config)) {
         console.log(`[${symbol}] Duplicate signal: ${signal.signal} ${signal.reason}, skipping`);
         signal.signal = 'NONE';
       }
@@ -599,12 +687,13 @@ class Runner {
         const balance = await broker.getBalance();
         const slDist = Math.abs(signal.entry - signal.sl);
         const slPips = slDist / pipToPrice(1, symbol);
-        const pvpl = pipValuePerLot(symbol);
-        const riskAmt = balance * (config.riskPercent / 100);
         const dr = CapitalBroker.loadDealingRulesCache(symbol);
         const brokerMax = dr ? dr.maxDealSize : 999999;
-        let size = Math.max(0.01, riskAmt / (slPips * pvpl));
-        size = Math.min(size, config.maxLot || 5, brokerMax);
+
+        const trades = loadTrades();
+        const dirMul = this._calcAdaptiveMultiplier(trades, signal.signal, config);
+        const consecutiveLosses = state.consecutiveLosses?.[symbol] || 0;
+        let size = this._calcSize(symbol, balance, dirMul, consecutiveLosses, config, slPips, brokerMax);
 
         if (size > 0) {
           const validation = await broker.validateSize(symbol, size);
@@ -626,19 +715,21 @@ class Runner {
               dealId: null,
             };
 
-            const trades = loadTrades();
-            trades.push({
+            const allTrades = loadTrades();
+            allTrades.push({
               round: state.round,
               time: new Date().toISOString(),
               symbol,
               action: signal.signal,
+              type: signal.signal,
               entry: signal.entry,
               sl: signal.sl,
               size: finalSize,
               setup: signal.reason,
               status: 'OPEN',
+              pnl: 0,
             });
-            saveTrades(trades);
+            saveTrades(allTrades);
             state.lastSignals[symbol] = { signal: signal.signal, reason: signal.reason, time: Date.now() };
             saveState(state);
 
@@ -684,6 +775,8 @@ class Runner {
       await Promise.race([discordPromise, timeout]);
     } catch (err) {
       console.error(`[${symbol}] Signal analysis error:`, err.message);
+      const discord = this.discord;
+      if (discord) discord.sendError(err, { symbol, mode: 'stream', round: state.round }).catch(() => {});
     }
   }
 
@@ -695,6 +788,22 @@ class Runner {
         const closed = state.positions[symbol];
         console.log(`[${symbol}] 🔒 Position closed by broker: ${closed.type} entry=${closed.entry}`);
 
+        // Fetch candles for approximate close price
+        let closePrice = null;
+        try {
+          const candles = await fetchCandlesCached(symbol, config.timeframe || 'H1', config);
+          closePrice = candles.length > 0 ? candles[candles.length - 1].close : null;
+        } catch {}
+        let pnl = 0;
+        if (closePrice != null && closed.size) {
+          const pvpl = pipValuePerLot(symbol);
+          const pips = (closed.type === 'BUY' ? closePrice - closed.entry : closed.entry - closePrice) / pipToPrice(1, symbol);
+          pnl = pips * closed.size * pvpl;
+        }
+
+        if (!state.consecutiveLosses) state.consecutiveLosses = {};
+        state.consecutiveLosses[symbol] = pnl < 0 ? (state.consecutiveLosses[symbol] || 0) + 1 : 0;
+
         delete state.positions[symbol];
         saveState(state);
 
@@ -703,6 +812,7 @@ class Runner {
         if (lastTrade) {
           lastTrade.status = 'CLOSED';
           lastTrade.closeTime = new Date().toISOString();
+          lastTrade.pnl = parseFloat(pnl.toFixed(2));
         } else {
           trades.push({
             round: state.round,
@@ -715,6 +825,7 @@ class Runner {
             setup: 'restored',
             status: 'CLOSED',
             closeTime: new Date().toISOString(),
+            pnl: parseFloat(pnl.toFixed(2)),
           });
         }
         saveTrades(trades);
@@ -764,7 +875,6 @@ class Runner {
 
     const balancePerSymbol = config.balancePerSymbol || 500;
     const allSegmentTrades = [];
-    let peakTotal = 0;
     let globalMaxDD = 0;
 
     const symState = {
@@ -775,7 +885,6 @@ class Runner {
       tradeHistory: [],
     };
 
-    let h4Ptr = 0;
     for (let seg = 0; seg < numSeg; seg++) {
       const segStart = startIdx + seg * segSize;
       const segEnd = seg < numSeg - 1 ? segStart + segSize : data.length;
@@ -783,6 +892,9 @@ class Runner {
       symState.balance = balancePerSymbol;
       symState.position = null;
       symState.consecutiveLosses = 0;
+
+      let peakTotal = 0;
+      let h4Ptr = 0;
 
       const getH4Trend = (h1Time) => {
         if (!h4Precalc || h4Precalc.length === 0) return 'neutral';
@@ -822,7 +934,7 @@ class Runner {
               if (profitPct >= baseActivate) {
                 const trailDist = Math.min(maxDist, Math.max(0.02, baseDist + (profitPct - baseActivate) * progFactor));
                 const lockSl = pos.entry - 0.05 * pos.atrValue;
-                const newSl = Math.min(pos.sl, pos.bestPrice + trailDist * pos.atrValue, lockSl);
+                const newSl = Math.min(pos.sl, Math.max(pos.bestPrice + trailDist * pos.atrValue, lockSl));
                 if (newSl < pos.sl) { pos.sl = newSl; pos.trailingActivated = true; }
               }
             }
@@ -948,7 +1060,7 @@ class Runner {
     }
 
     const allTrades = allSegmentTrades;
-    const btReport = new BacktestReport(allTrades);
+    const btReport = new BacktestReport(allTrades, balancePerSymbol);
     const report = btReport.generate();
     report.startBalance = balancePerSymbol;
     report.finalBalance = balancePerSymbol + allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);

@@ -272,9 +272,9 @@ class CapitalBroker extends BaseBroker {
       }));
   }
 
-  async closePosition(positionId) {
-    const positions = await this.getOpenPositions('');
-    const pos = positions.find(p => p.id === positionId);
+  async closePosition(positionId, symbol = '') {
+    const allPositions = await this.getOpenPositions(symbol);
+    const pos = allPositions.find(p => p.id === positionId);
     if (!pos) throw new Error(`Position ${positionId} not found`);
 
     const direction = pos.type === 'BUY' ? 'SELL' : 'BUY';

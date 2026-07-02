@@ -254,6 +254,25 @@ function normalizeSignal(symbol, decision, ind) {
   };
 }
 
+function buildH4FromH1(h1Candles) {
+  const h4 = [];
+  const groups = {};
+  for (const c of h1Candles) {
+    const t = new Date(c.time);
+    const h4Key = Math.floor(t.getTime() / 14400000) * 14400000;
+    if (!groups[h4Key]) {
+      groups[h4Key] = { time: new Date(h4Key).toISOString(), open: c.open, high: c.high, low: c.low, close: c.close };
+    } else {
+      const g = groups[h4Key];
+      g.high = Math.max(g.high, c.high);
+      g.low = Math.min(g.low, c.low);
+      g.close = c.close;
+    }
+  }
+  for (const key of Object.keys(groups).sort()) h4.push(groups[key]);
+  return h4;
+}
+
 async function analyzeFromData(symbol, config = {}, candles = null) {
   const timeframe = config.timeframe || 'H1';
   const limit = config.limit || 100;
@@ -268,13 +287,13 @@ async function analyzeFromData(symbol, config = {}, candles = null) {
 
     let h4Trend = 'neutral';
     try {
-      const h4Candles = await fetchCandles(symbol, 'h4', 50);
+      const h4Candles = candles ? buildH4FromH1(candles) : await fetchCandles(symbol, 'h4', 50);
       if (h4Candles && h4Candles.length >= 20) {
         const h4Ind = getIndicators(h4Candles);
         h4Trend = h4Ind.emaTrend;
       }
     } catch {
-      // H4 candles are optional; fall back to neutral trend
+      // H4 trend is optional; fall back to neutral
     }
 
     const decision = evaluate({ symbol, h4Trend, ind, config });

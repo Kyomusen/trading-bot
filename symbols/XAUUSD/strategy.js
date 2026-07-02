@@ -10,19 +10,14 @@ function evaluateWrapper(ind, h4Trend = 'neutral', config = {}) {
   const slPrice = decision.action === 'BUY'
     ? entryPrice - decision.slPips * shared.pipToPrice(1, SYMBOL)
     : entryPrice + decision.slPips * shared.pipToPrice(1, SYMBOL);
-  const tpPrice = decision.action === 'BUY'
-    ? entryPrice + decision.tpPips * shared.pipToPrice(1, SYMBOL)
-    : entryPrice - decision.tpPips * shared.pipToPrice(1, SYMBOL);
   return {
     symbol: SYMBOL,
     signal: decision.action,
     entry: parseFloat(entryPrice.toFixed(2)),
     sl: parseFloat(slPrice.toFixed(2)),
-    tp: parseFloat(tpPrice.toFixed(2)),
     reason: decision.setup,
     confidence: decision.confidence,
     slPips: decision.slPips,
-    tpPips: decision.tpPips,
     indicators: ind,
   };
 }
