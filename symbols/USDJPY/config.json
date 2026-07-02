@@ -23,11 +23,28 @@
   "maxLot": 5,
   "dynamicMaxLot": true,
   "maxDd": 50,
-  "activeSetups": ["trend_buy", "trend_sell"],
+  "activeSetups": [
+    "trend_buy",
+    "trend_sell"
+  ],
   "numSegments": 1,
-  "pendingOrder": { "enabled": false, "offsetPips": 5, "expiryBars": 12 },
-  "adaptiveSizing": { "enabled": true, "lookback": 50, "min": 0.5, "max": 1.5 },
-  "lossSizing": { "enabled": true, "reduceAfter": 1, "reduceTo": 0.65, "minFactor": 0.1 },
+  "pendingOrder": {
+    "enabled": false,
+    "offsetPips": 5,
+    "expiryBars": 12
+  },
+  "adaptiveSizing": {
+    "enabled": true,
+    "lookback": 50,
+    "min": 0.5,
+    "max": 1.5
+  },
+  "lossSizing": {
+    "enabled": true,
+    "reduceAfter": 1,
+    "reduceTo": 0.65,
+    "minFactor": 0.1
+  },
   "strategy": {
     "emaFast": 9,
     "emaSlow": 21,

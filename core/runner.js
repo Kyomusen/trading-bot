@@ -622,7 +622,7 @@ class Runner {
   async _trailOnH1Close(symbol, config, state, entry) {
     const sp = state.positions?.[symbol];
     if (!sp || !sp.atrValue || sp.atrValue <= 0) return;
-    if (!config.trailing || !sp.dealId) return;
+    if (!config.trailing || !sp.dealId || sp.dealId === 'PENDING') return;
 
     const profitPct = sp.type === 'BUY'
       ? (sp.bestPrice - sp.entry) / sp.atrValue
@@ -681,7 +681,7 @@ class Runner {
         signal.signal = 'NONE';
       }
 
-      const hasPos = (state.positions?.[symbol]?.dealId) != null;
+      const hasPos = state.positions?.[symbol]?.dealId != null && state.positions[symbol].dealId !== 'PENDING';
 
       if (signal.signal !== 'NONE' && !hasPos) {
         const balance = await broker.getBalance();
@@ -712,7 +712,7 @@ class Runner {
               bestPrice: signal.entry,
               currentTrailDist: null,
               trailingActivated: false,
-              dealId: null,
+              dealId: 'PENDING',
             };
 
             const allTrades = loadTrades();
@@ -733,12 +733,14 @@ class Runner {
             state.lastSignals[symbol] = { signal: signal.signal, reason: signal.reason, time: Date.now() };
             saveState(state);
 
-            // Fetch dealId after placing
-            const updated = await broker.getOpenPositions(symbol);
-            if (updated.length > 0) {
-              state.positions[symbol].dealId = updated[0].id;
-              saveState(state);
-            }
+            // Fetch dealId after placing (non-critical, _checkStreamPosition will update later)
+            try {
+              const updated = await broker.getOpenPositions(symbol);
+              if (updated.length > 0) {
+                state.positions[symbol].dealId = updated[0].id;
+                saveState(state);
+              }
+            } catch (_) {}
           }
         }
       }

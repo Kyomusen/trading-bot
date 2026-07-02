@@ -78,16 +78,24 @@ class CapitalBroker extends BaseBroker {
 
   async _request(url, options = {}, retries = 1) {
     const res = await fetch(url, options);
-    if (res.status === 401 && retries > 0 && !this._reconnecting) {
-      this._reconnecting = true;
-      try {
-        console.log('[Capital] Session expired, reconnecting...');
-        await this.connect();
-        const newOpts = { ...options, headers: { ...options.headers, ...this._authHeaders() } };
-        return await fetch(url, newOpts);
-      } finally {
-        this._reconnecting = false;
+    if (res.status === 401 && retries > 0) {
+      if (!this._reconnecting) {
+        this._reconnecting = true;
+        try {
+          console.log('[Capital] Session expired, reconnecting...');
+          await this.connect();
+        } finally {
+          this._reconnecting = false;
+        }
+      } else {
+        let waited = 0;
+        while (this._reconnecting && waited < 20) {
+          await new Promise(r => setTimeout(r, 200));
+          waited++;
+        }
       }
+      const newOpts = { ...options, headers: { ...options.headers, ...this._authHeaders() } };
+      return await fetch(url, newOpts);
     }
     return res;
   }
