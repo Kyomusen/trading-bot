@@ -5,7 +5,6 @@
   "main": "core/runner.js",
   "scripts": {
     "start": "node core/runner.js",
-    "live": "node core/runner.js live",
     "stream": "node core/runner.js stream",
     "backtest": "node core/runner.js backtest",
     "test": "node --test tests/",

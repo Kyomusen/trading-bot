@@ -6,6 +6,7 @@ const DiscordNotifier = require('./discord');
 const { pipToPrice, pipValuePerLot } = require('./strategy');
 const { fetchCandlesCached } = require('./dataSource');
 const { generateChart } = require('./chart');
+const tradeEngine = require('./tradeEngine');
 const fs = require('fs');
 const path = require('path');
 
@@ -49,7 +50,7 @@ const DISPLAY_LIMIT = 30;
 
 class Runner {
   constructor(options = {}) {
-    this.mode = options.mode || 'live';
+    this.mode = options.mode || 'stream';
     this.symbolFilter = options.symbol || null;
     this.discord = new DiscordNotifier(
       process.env.DISCORD_WEBHOOK_URL,
@@ -86,165 +87,6 @@ class Runner {
     return configs[type] || {};
   }
 
-  async runLive() {
-    const state = loadState();
-    state.round = parseInt(process.env.GITHUB_RUN_NUMBER, 10) || (state.round || 0) + 1;
-    saveState(state);
-    console.log(`\n🤖 Live Round #${state.round}`);
-    if (!state.lastSignals) state.lastSignals = {};
-    if (!state.positions) state.positions = {};
-    if (!state.consecutiveLosses) state.consecutiveLosses = {};
-
-    const results = [];
-    for (const [symbol, entry] of this.brokers) {
-      const { config } = entry;
-      try {
-        const strategy = require(`../symbols/${symbol}/strategy`);
-        const shared = require('./strategy');
-
-        const candles = await fetchCandlesCached(symbol, config.timeframe || 'H1', config);
-        console.log(`[${symbol}] Data: ${candles.length} candles`);
-
-        // Connect broker early if not already connected
-        if (!entry.broker) {
-          const brokerType = config.broker || 'capital';
-          const brokerConfig = this._getBrokerConfig(brokerType);
-          const broker = createBroker(brokerType, brokerConfig);
-          await broker.connect();
-          entry.broker = broker;
-        }
-
-        // Manage existing positions: update trailing stop progressively
-        await this._managePositions(symbol, config, candles, state, entry);
-
-        // Get real open position from broker
-        const brokerPositions = await entry.broker.getOpenPositions(symbol);
-        let brokerPos = brokerPositions.length > 0 ? brokerPositions[0] : null;
-
-        const signal = await strategy.analyzeFromData(config, candles);
-
-        if (signal.signal !== 'NONE' && this._isDuplicateSignal(state.lastSignals, symbol, signal, config)) {
-          console.log(`[${symbol}] Duplicate signal: ${signal.signal} ${signal.reason}, skipping`);
-          signal.signal = 'NONE';
-          signal.reason = `Duplicate: ${signal.reason}`;
-        }
-
-        let orderPlaced = false;
-        if (signal.signal !== 'NONE') {
-          const broker = entry.broker;
-          const hasPos = brokerPos ? 1 : 0;
-
-          if (hasPos >= (config.maxPositions || 1)) {
-            console.log(`[${symbol}] Max positions reached, skipping`);
-          } else {
-            const balance = await broker.getBalance();
-            const slDist = Math.abs(signal.entry - signal.sl);
-            const slPips = slDist / pipToPrice(1, symbol);
-            const dr = CapitalBroker.loadDealingRulesCache(symbol);
-            const brokerMax = dr ? dr.maxDealSize : 999999;
-
-            const trades = loadTrades();
-            const dirMul = this._calcAdaptiveMultiplier(trades, signal.signal, config);
-            const consecutiveLosses = state.consecutiveLosses[symbol] || 0;
-            let size = this._calcSize(symbol, balance, dirMul, consecutiveLosses, config, slPips, brokerMax);
-
-            if (size <= 0) {
-              console.log(`[${symbol}] Calculated size is 0, skipping`);
-            } else {
-              const validation = await broker.validateSize(symbol, size);
-              let finalSize = validation.valid ? validation.size : 0;
-
-              if (!validation.valid && size < validation.min) {
-                const minRiskPct = (validation.min * slPips * pipValuePerLot(symbol)) / balance * 100;
-                if (minRiskPct <= (config.riskPercent || 1) * 3) {
-                  finalSize = validation.min;
-                  console.log(`[${symbol}] Size ${size.toFixed(4)} < min ${validation.min}, using min (risk ${minRiskPct.toFixed(1)}%)`);
-                } else {
-                  console.log(`[${symbol}] Cannot trade: min size ${validation.min} would risk ${minRiskPct.toFixed(1)}% (limit: ${(config.riskPercent || 1) * 3}%)`);
-                  signal.signal = 'NONE';
-                  signal.reason = `Size too large: min ${validation.min} would risk ${minRiskPct.toFixed(0)}%`;
-                }
-              } else if (!validation.valid && size > validation.max) {
-                finalSize = validation.max;
-                console.log(`[${symbol}] Size ${size.toFixed(4)} > max ${validation.max}, capping`);
-              }
-
-              if (finalSize > 0) {
-                await broker.placeOrder(symbol, signal.signal, finalSize, signal.sl, null, '');
-                console.log(`[${symbol}] Order placed: ${signal.signal} size=${finalSize}`);
-                signal.lotSize = finalSize;
-                orderPlaced = true;
-
-                state.positions[symbol] = {
-                  type: signal.signal,
-                  entry: signal.entry,
-                  sl: signal.sl,
-                  size: finalSize,
-                  atrValue: signal.indicators?.atr || 0,
-                  bestPrice: signal.entry,
-                  currentTrailDist: null,
-                  trailingActivated: false,
-                };
-                saveState(state);
-
-                const allTrades = loadTrades();
-                allTrades.push({
-                  round: state.round,
-                  time: new Date().toISOString(),
-                  symbol,
-                  action: signal.signal,
-                  type: signal.signal,
-                  entry: signal.entry,
-                  sl: signal.sl,
-                  size: finalSize,
-                  setup: signal.reason,
-                  status: 'OPEN',
-                  pnl: 0,
-                });
-                saveTrades(allTrades);
-                state.lastSignals[symbol] = { signal: signal.signal, reason: signal.reason, time: Date.now() };
-                saveState(state);
-              }
-            }
-          }
-        }
-
-        // Re-fetch broker position after placing order to get real TSL
-        if (orderPlaced) {
-          const updated = await entry.broker.getOpenPositions(symbol);
-          brokerPos = updated.length > 0 ? updated[0] : null;
-        }
-
-        const chartCandles = candles.slice(-DISPLAY_LIMIT);
-        const ind = shared.getIndicators(candles);
-        const displayPos = brokerPos ? { entryPrice: brokerPos.entryPrice, sl: brokerPos.sl, type: brokerPos.type } : null;
-        const chartBuffer = generateChart(chartCandles, ind, displayPos, symbol, config.timeframe || 'H1', 600, 350, candles.map(c => c.close));
-
-        const openPositionsSummary = {};
-        const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
-        for (const [sym, pos] of Object.entries(state.positions || {})) {
-          const entry = { ...pos };
-          if (sym === symbol && currentPrice != null && pos.size) {
-            const pvpl = pipValuePerLot(sym);
-            entry.pnl = pos.type === 'BUY'
-              ? (currentPrice - pos.entry) * pos.size * pvpl
-              : (pos.entry - currentPrice) * pos.size * pvpl;
-          }
-          openPositionsSummary[sym] = entry;
-        }
-
-        console.log(`${symbol}: ${signal.signal}${brokerPos ? ' (has position)' : ''}`);
-        await this.discord.sendLiveTrade(signal, chartBuffer, openPositionsSummary, state.round, displayPos, currentPrice);
-        results.push({ symbol, signal, success: true });
-      } catch (err) {
-        console.error(`Error processing ${symbol}:`, err.message);
-        await this.discord.sendError(err, { symbol, mode: 'live', round: state.round });
-        results.push({ symbol, error: err.message, success: false });
-      }
-    }
-    return results;
-  }
-
   _isDuplicateSignal(lastSignals, symbol, signal, config = {}) {
     const last = lastSignals?.[symbol];
     if (!last) return false;
@@ -252,127 +94,6 @@ class Runner {
     const hours = config.duplicateHours ?? 6;
     if (Date.now() - last.time > hours * 3600000) return false;
     return last.signal === signal.signal && last.reason === signal.reason;
-  }
-
-  _calcSize(symbol, balance, dirMul, consecutiveLosses, config, slPips, brokerMax = 999999) {
-    const pvpl = pipValuePerLot(symbol);
-    if (!slPips || slPips <= 0) return symbol.includes('XAU') ? 0.0001 : 0.01;
-    let riskBase = balance * dirMul;
-    let riskAmount = riskBase * (config.riskPercent / 100);
-    let lots = riskAmount / (slPips * pvpl);
-
-    const lossCfg = config.lossSizing || {};
-    if (lossCfg.enabled !== false && consecutiveLosses >= (lossCfg.reduceAfter ?? 1)) {
-      const factor = Math.max(
-        lossCfg.minFactor ?? 0.1,
-        Math.pow(lossCfg.reduceTo ?? 0.65, Math.floor(consecutiveLosses / (lossCfg.reduceAfter ?? 1)))
-      );
-      lots *= factor;
-    }
-
-    const maxLot = Math.min(
-      config.dynamicMaxLot ? Math.max(0.01, balance / 50000) : (config.maxLot ?? 5),
-      brokerMax
-    );
-    const minLot = symbol.includes('XAU') ? 0.0001 : 0.01;
-    const size = Math.max(minLot, Math.min(maxLot, lots));
-    const riskPct = (size * slPips * pvpl) / riskBase * 100;
-    if (riskPct > (config.riskPercent || 1) * 3) return 0;
-    return size;
-  }
-
-  _calcAdaptiveMultiplier(tradeHistory, direction, config) {
-    const adCfg = config.adaptiveSizing || {};
-    if (!adCfg.enabled) return 1;
-    const dirTrades = tradeHistory.filter(t => (t.type || t.action) === direction);
-    if (dirTrades.length < 5) return 1;
-    const lookback = adCfg.lookback ?? 50;
-    const recent = dirTrades.slice(-lookback);
-    if (recent.length === 0) return 1;
-    const wins = recent.filter(t => (t.pnl ?? 0) > 0).length;
-    const winRate = wins / recent.length;
-    const minMul = adCfg.min ?? 0.5;
-    const maxMul = adCfg.max ?? 1.5;
-    if (winRate >= 0.5) return 1 + (winRate - 0.5) * 2 * (maxMul - 1);
-    return 1 - (0.5 - winRate) * 2 * (1 - minMul);
-  }
-
-  async _managePositions(symbol, config, candles, state, entry) {
-    const sp = state.positions?.[symbol];
-    if (!sp || !sp.atrValue || sp.atrValue <= 0) return;
-    if (!config.trailing) return;
-
-    try {
-      const positions = await entry.broker.getOpenPositions(symbol);
-      if (positions.length === 0) {
-        // Position closed by broker — track PnL and consecutive losses
-        const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
-        if (currentPrice != null && sp.size) {
-          const pvpl = pipValuePerLot(symbol);
-          const pips = (sp.type === 'BUY' ? currentPrice - sp.entry : sp.entry - currentPrice) / pipToPrice(1, symbol);
-          const pnl = pips * sp.size * pvpl;
-
-          if (!state.consecutiveLosses) state.consecutiveLosses = {};
-          state.consecutiveLosses[symbol] = pnl < 0 ? (state.consecutiveLosses[symbol] || 0) + 1 : 0;
-
-          const trades = loadTrades();
-          const lastTrade = [...trades].reverse().find(t => t.symbol === symbol && t.status === 'OPEN');
-          if (lastTrade) {
-            lastTrade.status = 'CLOSED';
-            lastTrade.closeTime = new Date().toISOString();
-            lastTrade.pnl = parseFloat(pnl.toFixed(2));
-          }
-          saveTrades(trades);
-        }
-
-        delete state.positions[symbol];
-        saveState(state);
-        return;
-      }
-      const pos = positions[0];
-
-      const currentBest = sp.type === 'BUY'
-        ? Math.max(...candles.map(c => c.high))
-        : Math.min(...candles.map(c => c.low));
-      if (sp.type === 'BUY' && currentBest > sp.bestPrice) sp.bestPrice = currentBest;
-      else if (sp.type === 'SELL' && currentBest < sp.bestPrice) sp.bestPrice = currentBest;
-
-      const profitPct = sp.type === 'BUY'
-        ? (sp.bestPrice - sp.entry) / sp.atrValue
-        : (sp.entry - sp.bestPrice) / sp.atrValue;
-
-      const baseActivate = config.trailingActivate ?? 0.2;
-      const baseDist = config.trailingDistance ?? 0.1;
-      const maxDist = config.trailingDistanceMax ?? 0.5;
-      const progFactor = config.trailingProgressive ?? 0.01;
-
-      if (profitPct >= baseActivate) {
-        const trailDist = Math.min(
-          maxDist,
-          Math.max(0.02, baseDist + (profitPct - baseActivate) * progFactor)
-        );
-
-        const trailPrice = trailDist * sp.atrValue;
-        const newSl = sp.type === 'BUY'
-          ? sp.bestPrice - trailPrice
-          : sp.bestPrice + trailPrice;
-
-        if (!sp.trailingActivated) {
-          await entry.broker.updatePositionStopLevel(pos.id, newSl);
-          sp.currentTrailDist = trailDist;
-          sp.trailingActivated = true;
-          console.log(`[${symbol}] SL UPDATED (activate): dist=${trailDist.toFixed(4)} ATR → ${newSl.toFixed(2)}`);
-          saveState(state);
-        } else if (Math.abs(trailDist - (sp.currentTrailDist || 0)) > 0.001) {
-          await entry.broker.updatePositionStopLevel(pos.id, newSl);
-          sp.currentTrailDist = trailDist;
-          console.log(`[${symbol}] SL updated: dist=${trailDist.toFixed(4)} ATR → ${newSl.toFixed(2)}`);
-          saveState(state);
-        }
-      }
-    } catch (err) {
-      console.error(`[${symbol}] Position management error:`, err.message);
-    }
   }
 
   async runStream() {
@@ -622,47 +343,29 @@ class Runner {
   async _trailOnH1Close(symbol, config, state, entry) {
     const sp = state.positions?.[symbol];
     if (!sp || !sp.atrValue || sp.atrValue <= 0) return;
-    if (!config.trailing || !sp.dealId || sp.dealId === 'PENDING') return;
+    if (!sp.dealId || sp.dealId === 'PENDING') return;
 
-    const profitPct = sp.type === 'BUY'
-      ? (sp.bestPrice - sp.entry) / sp.atrValue
-      : (sp.entry - sp.bestPrice) / sp.atrValue;
-
-    const baseActivate = config.trailingActivate ?? 0.2;
-    if (profitPct < baseActivate) return;
-
-    const baseDist = config.trailingDistance ?? 0.1;
-    const maxDist = config.trailingDistanceMax ?? 0.5;
-    const progFactor = config.trailingProgressive ?? 0.01;
-
-    const trailDist = Math.min(
-      maxDist,
-      Math.max(0.02, baseDist + (profitPct - baseActivate) * progFactor)
-    );
-
-    const trailPrice = trailDist * sp.atrValue;
-    const lockSl = sp.type === 'BUY'
-      ? sp.entry + 0.05 * sp.atrValue
-      : sp.entry - 0.05 * sp.atrValue;
-
-    let newSl;
-    if (sp.type === 'BUY') {
-      newSl = Math.max(sp.sl, sp.bestPrice - trailPrice, lockSl);
-    } else {
-      newSl = Math.min(sp.sl, sp.bestPrice + trailPrice, lockSl);
-    }
+    const result = tradeEngine.calcTrailingStop({
+      type: sp.type,
+      entry: sp.entry,
+      atrValue: sp.atrValue,
+      bestPrice: sp.bestPrice,
+      currentSl: sp.sl,
+      config,
+    });
+    if (!result) return;
 
     try {
-      await entry.broker.updatePositionStopLevel(sp.dealId, newSl);
-      sp.sl = newSl;
+      await entry.broker.updatePositionStopLevel(sp.dealId, result.sl);
+      sp.sl = result.sl;
 
       if (!sp.trailingActivated) {
         sp.trailingActivated = true;
-        console.log(`[${symbol}] ⚡ TSL activated @ ${trailDist.toFixed(4)} ATR → ${newSl.toFixed(2)}`);
+        console.log(`[${symbol}] ⚡ TSL activated @ ${result.trailDist.toFixed(4)} ATR → ${result.sl.toFixed(2)}`);
       } else {
-        console.log(`[${symbol}] SL updated ${trailDist.toFixed(4)} ATR → ${newSl.toFixed(2)}`);
+        console.log(`[${symbol}] SL updated ${result.trailDist.toFixed(4)} ATR → ${result.sl.toFixed(2)}`);
       }
-      sp.currentTrailDist = trailDist;
+      sp.currentTrailDist = result.trailDist;
       saveState(state);
     } catch (err) {
       console.error(`[${symbol}] Trail on H1 close failed: ${err.message}`);
@@ -691,9 +394,9 @@ class Runner {
         const brokerMax = dr ? dr.maxDealSize : 999999;
 
         const trades = loadTrades();
-        const dirMul = this._calcAdaptiveMultiplier(trades, signal.signal, config);
+        const dirMul = tradeEngine.calcAdaptiveMultiplier(trades, signal.signal, config);
         const consecutiveLosses = state.consecutiveLosses?.[symbol] || 0;
-        let size = this._calcSize(symbol, balance, dirMul, consecutiveLosses, config, slPips, brokerMax);
+        let size = tradeEngine.calcPositionSize({ symbol, balance, dirMul, consecutiveLosses, config, slPips, brokerMax });
 
         if (size > 0) {
           const validation = await broker.validateSize(symbol, size);
@@ -915,31 +618,19 @@ class Runner {
         if (symState.position) {
           const pos = symState.position;
 
-          if (config.trailing && pos.atrValue > 0) {
-            const baseActivate = config.trailingActivate ?? 0.2;
-            const baseDist = config.trailingDistance ?? 0.1;
-            const maxDist = config.trailingDistanceMax ?? 0.5;
-            const progFactor = config.trailingProgressive ?? 0.01;
+          if (pos.atrValue > 0) {
+            if (pos.type === 'BUY' && current.high > pos.bestPrice) pos.bestPrice = current.high;
+            else if (pos.type === 'SELL' && current.low < pos.bestPrice) pos.bestPrice = current.low;
 
-            if (pos.type === 'BUY') {
-              if (current.high > pos.bestPrice) pos.bestPrice = current.high;
-              const profitPct = (pos.bestPrice - pos.entry) / pos.atrValue;
-              if (profitPct >= baseActivate) {
-                const trailDist = Math.min(maxDist, Math.max(0.02, baseDist + (profitPct - baseActivate) * progFactor));
-                const lockSl = pos.entry + 0.05 * pos.atrValue;
-                const newSl = Math.max(pos.sl, pos.bestPrice - trailDist * pos.atrValue, lockSl);
-                if (newSl > pos.sl) { pos.sl = newSl; pos.trailingActivated = true; }
-              }
-            } else {
-              if (current.low < pos.bestPrice) pos.bestPrice = current.low;
-              const profitPct = (pos.entry - pos.bestPrice) / pos.atrValue;
-              if (profitPct >= baseActivate) {
-                const trailDist = Math.min(maxDist, Math.max(0.02, baseDist + (profitPct - baseActivate) * progFactor));
-                const lockSl = pos.entry - 0.05 * pos.atrValue;
-                const newSl = Math.min(pos.sl, pos.bestPrice + trailDist * pos.atrValue, lockSl);
-                if (newSl < pos.sl) { pos.sl = newSl; pos.trailingActivated = true; }
-              }
-            }
+            const trail = tradeEngine.calcTrailingStop({
+              type: pos.type,
+              entry: pos.entry,
+              atrValue: pos.atrValue,
+              bestPrice: pos.bestPrice,
+              currentSl: pos.sl,
+              config,
+            });
+            if (trail) { pos.sl = trail.sl; pos.trailingActivated = true; }
           }
 
           let exitPrice = null;
@@ -982,46 +673,18 @@ class Runner {
             const { action, slPips } = decision;
             const atrVal = ind.atr || 0;
 
-            const adCfg = config.adaptiveSizing;
-            let dirMul = 1;
-            if (adCfg?.enabled) {
-              const dirTrades = symState.tradeHistory.filter(t => t.type === action);
-              if (dirTrades.length >= 5) {
-                const recent = dirTrades.slice(-(adCfg.lookback || 50));
-                const wins = recent.filter(t => t.pnl > 0).length;
-                const wr = wins / recent.length;
-                dirMul = wr >= 0.5
-                  ? 1 + (wr - 0.5) * 2 * ((adCfg.max || 1.5) - 1)
-                  : 1 - (0.5 - wr) * 2 * (1 - (adCfg.min || 0.5));
-                dirMul = Math.max(adCfg.min || 0.5, Math.min(adCfg.max || 1.5, dirMul));
-              }
-            }
-
-            const pvpl = shared.pipValuePerLot(symbol);
             const dr = CapitalBroker.loadDealingRulesCache(symbol);
             const brokerMax = dr ? dr.maxDealSize : 999999;
-            const maxLot = config.dynamicMaxLot
-              ? Math.min(brokerMax, config.maxLot || 5, Math.max(0.01, symState.balance / 50000))
-              : Math.min(config.maxLot || 5, brokerMax);
-            const minLot = symbol.includes('XAU') ? 0.0001 : 0.01;
-            let size;
-            const ls = config.lossSizing;
-            if (ls?.enabled && symState.consecutiveLosses >= (ls.reduceAfter || 1)) {
-              const factor = Math.max(ls.minFactor || 0.1, (ls.reduceTo || 0.65) ** Math.floor(symState.consecutiveLosses / (ls.reduceAfter || 1))) * dirMul;
-              const riskBase = symState.balance * factor;
-              const riskAmount = riskBase * (config.riskPercent / 100);
-              const lots = riskAmount / (slPips * pvpl);
-              size = Math.min(maxLot, Math.max(minLot, parseFloat(lots.toFixed(4))));
-              const riskPct = (size * slPips * pvpl) / (symState.balance * dirMul) * 100;
-              if (riskPct > config.riskPercent * 3) size = 0;
-            } else {
-              const riskBase = symState.balance * dirMul;
-              const riskAmount = riskBase * (config.riskPercent / 100);
-              const lots = riskAmount / (slPips * pvpl);
-              size = Math.min(maxLot, Math.max(minLot, parseFloat(lots.toFixed(4))));
-              const riskPct = (size * slPips * pvpl) / riskBase * 100;
-              if (riskPct > config.riskPercent * 3) size = 0;
-            }
+            const dirMul = tradeEngine.calcAdaptiveMultiplier(symState.tradeHistory, action, config);
+            const size = tradeEngine.calcPositionSize({
+              symbol,
+              balance: symState.balance,
+              dirMul,
+              consecutiveLosses: symState.consecutiveLosses,
+              config,
+              slPips,
+              brokerMax,
+            });
 
             if (size) {
               const slp = (config.slippagePips || 0) * shared.pipToPrice(1, symbol);
@@ -1091,8 +754,12 @@ class Runner {
 }
 
 async function main() {
-  const mode = process.argv[2] || 'live';
+  const mode = process.argv[2] || 'stream';
   const symbol = process.argv[3] || null;
+
+  if (mode !== 'backtest' && mode !== 'stream') {
+    throw new Error(`Unknown mode "${mode}". Use "backtest" or "stream".`);
+  }
 
   const runner = new Runner({ mode, symbol });
   try {
@@ -1101,10 +768,8 @@ async function main() {
     if (mode === 'backtest') {
       if (!symbol) throw new Error('Symbol required for backtest');
       await runner.runBacktest(symbol);
-    } else if (mode === 'stream') {
-      await runner.runStream();
     } else {
-      await runner.runLive();
+      await runner.runStream();
     }
   } catch (err) {
     console.error('Runner error:', err.message);
