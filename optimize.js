@@ -78,7 +78,7 @@ function run(opts) {
           const f = Math.max(ls.minFactor||0.1, (ls.reduceTo||0.65)**Math.floor(cl/(ls.reduceAfter||1))) * dm;
           const lots = (balance*f*(cfg.riskPercent/100))/(slPips*pvpl);
           size = Math.min(ml, Math.max(0.0001, parseFloat(lots.toFixed(4))));
-          if ((size*slPips*pvpl)/(balance*f)*100 > cfg.riskPercent*3) size = 0;
+          if ((size*slPips*pvpl)/(balance*dm)*100 > cfg.riskPercent*3) size = 0;
         } else {
           const lots = (balance*dm*(cfg.riskPercent/100))/(slPips*pvpl);
           size = Math.min(ml, Math.max(0.0001, parseFloat(lots.toFixed(4))));

@@ -649,7 +649,7 @@ class Runner {
     if (sp.type === 'BUY') {
       newSl = Math.max(sp.sl, sp.bestPrice - trailPrice, lockSl);
     } else {
-      newSl = Math.min(sp.sl, Math.max(sp.bestPrice + trailPrice, lockSl));
+      newSl = Math.min(sp.sl, sp.bestPrice + trailPrice, lockSl);
     }
 
     try {
@@ -934,7 +934,7 @@ class Runner {
               if (profitPct >= baseActivate) {
                 const trailDist = Math.min(maxDist, Math.max(0.02, baseDist + (profitPct - baseActivate) * progFactor));
                 const lockSl = pos.entry - 0.05 * pos.atrValue;
-                const newSl = Math.min(pos.sl, Math.max(pos.bestPrice + trailDist * pos.atrValue, lockSl));
+                const newSl = Math.min(pos.sl, pos.bestPrice + trailDist * pos.atrValue, lockSl);
                 if (newSl < pos.sl) { pos.sl = newSl; pos.trailingActivated = true; }
               }
             }
@@ -1010,7 +1010,7 @@ class Runner {
               const riskAmount = riskBase * (config.riskPercent / 100);
               const lots = riskAmount / (slPips * pvpl);
               size = Math.min(maxLot, Math.max(minLot, parseFloat(lots.toFixed(4))));
-              const riskPct = (size * slPips * pvpl) / riskBase * 100;
+              const riskPct = (size * slPips * pvpl) / (symState.balance * dirMul) * 100;
               if (riskPct > config.riskPercent * 3) size = 0;
             } else {
               const riskBase = symState.balance * dirMul;
