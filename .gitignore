@@ -1,0 +1,21 @@
+# ===== Secrets (มี credential จริง ห้าม commit เด็ดขาด) =====
+.env
+.env.*
+!.env.example
+
+# ===== Dependencies =====
+node_modules/
+
+# ===== Data (historical 112k bars + test logs ใหญ่ 53M, ดึงใหม่ได้) =====
+data/
+
+# ===== Build / archive artifacts =====
+trading-bot.zip
+*.log
+npm-debug.log*
+
+# ===== OS / editor =====
+.DS_Store
+.idea/
+.vscode/
+*.swp
