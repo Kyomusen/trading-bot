@@ -143,12 +143,12 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
     const tradeEvent = createTradeEvent({
       strategy: signal.strategy, epic, direction: signal.direction,
       entry: signal.entry, stopLoss: signal.stopLoss, takeProfit: null, size: actualSize,
-      riskAmount: Math.min(riskAmt, size * slDist),
+      riskAmount: Math.min(riskAmt, actualSize * slDist),
       confidence: signal.confidence, indicators: signal.indicators,
       openedAt: Date.now(),
     });
     openTradeMap.set(order.dealReference, tradeEvent);
-    console.log(`[live] OPEN ${order.dealReference} ${signal.direction} size=${size} @${entryUsed.toFixed(2)} SL=${stopUsed.toFixed(2)}`);
+    console.log(`[live] OPEN ${order.dealReference} ${signal.direction} size=${actualSize} @${entryUsed.toFixed(2)} SL=${stopUsed.toFixed(2)}`);
     logTrade({ type: 'OPEN', epic, dealId: order.dealReference, direction: signal.direction, entry: signal.entry, stopLoss: signal.stopLoss, size: actualSize, openedAt: Date.now() });
     try { await discordSender.send(discordFormatter.formatOpenEvent(tradeEvent)); } catch (e) { console.error('[live] discord open err', e.message); }
   }
