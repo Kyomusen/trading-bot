@@ -33,6 +33,7 @@ module.exports = {
       trailingActivate: 0.1,
       trailingDistance: 0.15,
       trailingDistanceMax: 0.5,
+      adaptiveVol: true, // ปรับ SL/trailing ตาม regime ความผันผวน (ATR vs MA ระยะยาว) — dynamic ไร้ overfit
       trailingProgressive: 0,
       atrSl: 1.2,
       spreadPips: 25,
@@ -40,6 +41,11 @@ module.exports = {
       maxLot: 5,
       maxDd: 50,
       activeSetups: ['trend_buy', 'trend_sell', 'momentum_buy', 'momentum_sell'],
+      filters: {
+        bbWidthMinPct: 1.0, // กรองสัญญาณแย่: ไม่เทรดตอน Bollinger แคบ (sideway/chop) — ลด whipsaw
+        psarAlign: true,    // ต้องอยู่ทิศทางเดียวกับ PSAR (ยืนยันเทรนด์)
+      },
+      tradingHours: { windows: [[0, 16]] }, // เทรดเฉพาะหน้าต่างสภาพคล่องสูง UTC 00-16 (Asian+London+London/NY overlap) — ลด DD จากช่วงบาง/ny afternoon
       rsi: {
         trend_buy: { min: 25, max: 50 },
         trend_sell: { min: 50, max: 75 },
@@ -159,7 +165,7 @@ module.exports = {
 
     // ===== Risk guardrails =====
   risk: {
-    maxConcurrentTrades: 5,
+    maxConcurrentTrades: 1,
   },
 
   // ===== Broker (margin / leverage) =====
@@ -189,6 +195,7 @@ module.exports = {
     dataPath: './data/historical',
     outputDir: './backtest/output', // ไฟล์ผลลัพธ์ (JSON summary + CSV รายเทรด) จะเขียนลงที่นี่
     exitOnOppositeSignal: false, // ทดสอบ: ปิดออเดอร์เมื่อมีสัญญาณสวนทาง (default ปิดเฉพาะเมื่อ hit SL/TSL เหมือนเดิม)
+    entryCooldownCandles: 0, // จำนวนแท่ง (H1) ที่ต้องรอหลังออเดอร์ปิด ก่อนเปิดออเดอร์ใหม่ (ลด overtrading/serial correlation)
   },
 
 };

@@ -1,8 +1,19 @@
-const { RSI, EMA, MACD, ATR } = require('technicalindicators');
+const { RSI, EMA, MACD, ATR, ADX, BollingerBands, Stochastic, PSAR, SMA } = require('technicalindicators');
 const config = require('../config');
 
 function pipToPrice(pips) {
   return pips * 0.01;
+}
+
+// ปรับตัวตาม regime ความผันผวน แบบ dynamic (ใช้แค่ข้อมูลอดีต — ไม่มี look-ahead)
+// atrRatio = ATR ปัจจุบัน / ค่าเฉลี่ย ATR ระยะยาว (~30 วัน)
+// แบนด์เป็นค่ากลมๆ ตามหลักเศรษฐศาสตร์ (ผันผวนเพิ่ม/ลด 20-40% จากปกติ) ไม่ได้ fit ทศนิยมกับชุดข้อมูล
+// → โครงสร้างกัน overfit โดยธรรมชาติ
+function volRegime(atrRatio) {
+  if (atrRatio == null) return { atrSlMult: 1, trailMult: 1 };
+  if (atrRatio >= 1.4) return { atrSlMult: 1.3, trailMult: 1.25 };  // ผันผวนจัด → ปล่อย SL/TRAIL กว้างขึ้น ไม่ให้โดน noise สะสม
+  if (atrRatio <= 0.8) return { atrSlMult: 0.85, trailMult: 0.85 }; // นิ่ง → คัด SL/TRAIL ให้แน่นขึ้น เก็บกำไรมากขึ้น
+  return { atrSlMult: 1, trailMult: 1 };
 }
 
 function h4FromH1(candles) {
@@ -32,6 +43,12 @@ function calcInd(candles) {
   const ema50All = EMA.calculate({ values: close, period: 50 });
   const macdAll = MACD.calculate({ values: close, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false });
   const atrAll = ATR.calculate({ high, low, close, period: 14 });
+  const adxAll = ADX.calculate({ high, low, close, period: 14 });
+  const bbAll = BollingerBands.calculate({ values: close, period: 20, stdDev: 2 });
+  const stochAll = Stochastic.calculate({ high, low, close, period: 14, signalPeriod: 3 });
+  const psarAll = PSAR.calculate({ high, low, step: 0.02, max: 0.2 });
+  const atrMaAll = SMA.calculate({ values: atrAll, period: 50 });
+  const atrMaLongAll = SMA.calculate({ values: atrAll, period: 720 });
 
   const last = {
     currentPrice: close[n - 1],
@@ -46,6 +63,12 @@ function calcInd(candles) {
       histogramTrend: (macdAll[macdAll.length - 1]?.histogram ?? 0) > 0 ? 'positive' : 'negative',
     },
     atr: atrAll[atrAll.length - 1] ?? null,
+    adx: adxAll[adxAll.length - 1] ?? null,
+    bbWidthPct: (bbAll[bbAll.length - 1] && bbAll[bbAll.length - 1].middle) ? ((bbAll[bbAll.length - 1].upper - bbAll[bbAll.length - 1].lower) / bbAll[bbAll.length - 1].middle) * 100 : null,
+    stoch: stochAll[stochAll.length - 1] ? { k: stochAll[stochAll.length - 1].k, d: stochAll[stochAll.length - 1].d } : null,
+    psarDir: (psarAll[psarAll.length - 1] != null) ? (close[n - 1] > psarAll[psarAll.length - 1] ? 'up' : 'down') : null,
+    atrMa: atrMaAll[atrMaAll.length - 1] ?? null,
+    atrRatio: (atrAll[atrAll.length - 1] != null && atrMaLongAll[atrMaLongAll.length - 1]) ? atrAll[atrAll.length - 1] / atrMaLongAll[atrMaLongAll.length - 1] : null,
   };
 
   const recent = candles.slice(-24);
@@ -66,12 +89,22 @@ function _evaluate(candles, pc, idx, epic) {
   const sc = config.symbols.find(s => s.epic === epic) || {};
   if (!sc || !sc.enabled) return null;
 
-  // session filter สำหรับ generate signal เท่านั้น (1 = 24/7, null = ไม่จำกัด)
+  // session filter สำหรับ generate signal เท่านั้น
+  // รองรับ: null (24/7) | {utcStart,utcEnd} (หน้าต่างเดียว) |
+  //        {windows:[[s,e],...]} (หลายหน้าต่างอนุญาต) | {exclude:[[s,e],...]} (บล็อกหน้าต่าง)
   const session = sc.tradingHours;
-  if (session && session.utcStart != null) {
+  if (session) {
     const cur = idx != null ? candles[idx] : candles[candles.length - 1];
     const h = new Date(cur.timestamp).getUTCHours();
-    if (h < session.utcStart || h >= session.utcEnd) return null;
+    if (session.windows) {
+      const ok = session.windows.some(([s, e]) => (e <= s ? (h >= s || h < e) : (h >= s && h < e)));
+      if (!ok) return null;
+    } else if (session.exclude) {
+      const blocked = session.exclude.some(([s, e]) => (e <= s ? (h >= s || h < e) : (h >= s && h < e)));
+      if (blocked) return null;
+    } else if (session.utcStart != null) {
+      if (h < session.utcStart || h >= session.utcEnd) return null;
+    }
   }
 
   const ind = pc ? pc[idx] : calcInd(candles);
@@ -105,7 +138,8 @@ function _evaluate(candles, pc, idx, epic) {
     : (h4Trend === 'bullish' || aboveEma50);
 
   const pips = Math.round(atr / pipToPrice(1));
-  const slM = sc.atrSl || 1.5;
+  const reg = (sc.adaptiveVol === false) ? { atrSlMult: 1, trailMult: 1 } : volRegime(ind.atrRatio); // ปรับ SL/trailing ตาม regime (dynamic, ไม่ overfit)
+  const slM = (sc.atrSl || 1.5) * reg.atrSlMult;
   const spreadPips = sc.spreadPips || 20;
   const slPips = Math.max(Math.round(pips * slM + spreadPips), 10);
 
@@ -122,22 +156,54 @@ function _evaluate(candles, pc, idx, epic) {
     if (rsi < rr.min || rsi > rr.max) continue;
 
     if (setup === 'trend_sell' && downtrend && nearResistance)
-      candidates.push({ action: 'SELL', setup, confidence: 0.8, slPips });
+      candidates.push({ action: 'SELL', setup, confidence: 0.8, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
     if (setup === 'trend_buy' && uptrend && nearSupport)
-      candidates.push({ action: 'BUY', setup, confidence: 0.8, slPips });
+      candidates.push({ action: 'BUY', setup, confidence: 0.8, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
     if (setup === 'momentum_sell' && downtrend && macdNegative && macdCrossoverBear)
-      candidates.push({ action: 'SELL', setup, confidence: 0.7, slPips });
+      candidates.push({ action: 'SELL', setup, confidence: 0.7, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
     if (setup === 'momentum_buy' && uptrend && macdPositive && macdCrossoverBull)
-      candidates.push({ action: 'BUY', setup, confidence: 0.7, slPips });
+      candidates.push({ action: 'BUY', setup, confidence: 0.7, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
     if (setup === 'pullback_sell' && downtrend && macdNegative && macdCrossoverBear)
-      candidates.push({ action: 'SELL', setup, confidence: 0.8, slPips });
+      candidates.push({ action: 'SELL', setup, confidence: 0.8, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
     if (setup === 'pullback_buy' && uptrend && macdPositive && macdCrossoverBull)
-      candidates.push({ action: 'BUY', setup, confidence: 0.8, slPips });
+      candidates.push({ action: 'BUY', setup, confidence: 0.8, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
   }
 
-  if (candidates.length === 0) return null;
-  candidates.sort((a, b) => b.confidence - a.confidence);
-  const d = candidates[0];
+  // ----- ตัวกรองคุณภาพสัญญาณ (กรองสัญญาณแย่ออก โดยไม่ลดความถี่ของสัญญาณดี) -----
+  const f = sc.filters || {};
+  const filtered = candidates.filter((c) => {
+    if (f.dropSetups && f.dropSetups.includes(c.setup)) return false;
+    // BUY ที่ RSI สูงเกินไปมักอ่อน (ข้อมูล: RSI 50-70 ให้ PF ต่ำ)
+    if (c.action === 'BUY' && f.buyRsiMax != null && rsi > f.buyRsiMax) return false;
+    // ตอนราคาแทบชิด EMA50 (ไม่มีเทรนด์ชัดเจน) มักติด SL → เรียกเทรนด์ที่แข็งพอ
+    if (f.minTrendStrengthPct != null && ema50) {
+      const ts = (Math.abs(currentPrice - ema50) / currentPrice) * 100;
+      if (ts < f.minTrendStrengthPct) return false;
+    }
+    // ADX: ไม่มีเทรนด์ชัดเจน (chop) → ข้าม (กรองสัญญาณแย่ที่สุดในฝั่ง sideway)
+    if (f.adxMin != null && ind.adx != null && ind.adx < f.adxMin) return false;
+    // Bollinger width แคบ = ช่องแคบไร้ทิศทาง → ข้าม
+    if (f.bbWidthMinPct != null && ind.bbWidthPct != null && ind.bbWidthPct < f.bbWidthMinPct) return false;
+    // PSAR ต้องอยู่ในทิศทางเดียวกับสัญญาณ (ยืนยันเทรนด์)
+    if (f.psarAlign && ind.psarDir) {
+      const aligned = (c.action === 'BUY' && ind.psarDir === 'up') || (c.action === 'SELL' && ind.psarDir === 'down');
+      if (!aligned) return false;
+    }
+    // Stochastic ยืนยัน: BUY ไม่เอาเวลา overbought (k>80), SELL ไม่เอาเวลา oversold (k<20)
+    if (f.stochConfirm && ind.stoch) {
+      if (c.action === 'BUY' && ind.stoch.k > 80) return false;
+      if (c.action === 'SELL' && ind.stoch.k < 20) return false;
+    }
+    // ความผันผวนพุ่งทะลุ MA (crash/whipsaw) → ข้าม เพื่อลด DD จากเหตุการณ์กระชาก
+    if (f.volMaxMult != null && ind.atr != null && ind.atrMa != null && ind.atrMa > 0) {
+      if (ind.atr > ind.atrMa * f.volMaxMult) return false;
+    }
+    return true;
+  });
+
+  if (filtered.length === 0) return null;
+  filtered.sort((a, b) => b.confidence - a.confidence);
+  const d = filtered[0];
 
   const slippage = sc.slippagePips || 2;
   const entryPrice = d.action === 'BUY'
@@ -153,6 +219,7 @@ function _evaluate(candles, pc, idx, epic) {
     entry: parseFloat(entryPrice.toFixed(5)),
     stopLoss: parseFloat(slPrice.toFixed(5)),
     confidence: d.confidence,
+    trailingDistance: d.trailingDistance,
     indicators: {
       rsi, ema20, ema50, emaTrend,
       macd: macd.histogram, atr, h4Trend,
@@ -205,6 +272,12 @@ function precalc(candles) {
   const ema50All = EMA.calculate({ values: close, period: 50 });
   const macdAll = MACD.calculate({ values: close, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false });
   const atrAll = ATR.calculate({ high, low, close, period: 14 });
+  const adxAll = ADX.calculate({ high, low, close, period: 14 });
+  const bbAll = BollingerBands.calculate({ values: close, period: 20, stdDev: 2 });
+  const stochAll = Stochastic.calculate({ high, low, close, period: 14, signalPeriod: 3 });
+  const psarAll = PSAR.calculate({ high, low, step: 0.02, max: 0.2 });
+  const atrMaAll = SMA.calculate({ values: atrAll, period: 50 });
+  const atrMaLongAll = SMA.calculate({ values: atrAll, period: 720 });
 
   // คำนวณ offset จากความยาวจริงของ array ที่ library ให้มา
   // จะได้ไม่พังถ้าต่อมา technicalindicators เปลี่ยนจำนวน warmup bar
@@ -213,7 +286,13 @@ function precalc(candles) {
   const offEma50 = close.length - ema50All.length;
   const offMacd = close.length - macdAll.length;
   const offAtr = close.length - atrAll.length;
-  const offset = Math.max(offRsi, offEma20, offEma50, offMacd, offAtr);
+  const offAdx = close.length - adxAll.length;
+  const offBb = close.length - bbAll.length;
+  const offStoch = close.length - stochAll.length;
+  const offPsar = close.length - psarAll.length;
+  const offAtrMa = atrAll.length - atrMaAll.length;
+  const offAtrMaLong = atrAll.length - atrMaLongAll.length;
+  const offset = Math.max(offRsi, offEma20, offEma50, offMacd, offAtr, offAdx, offBb, offStoch, offPsar);
 
   // H4 trend แบบไม่มี look-ahead:
   // สร้าง H4 buckets ล่วงหน้า (close = ราคาปิดสุดท้ายของแต่ละ bucket)
@@ -239,6 +318,15 @@ function precalc(candles) {
     }
     const currentPrice = close[i];
     const atrVal = atrAll[i - offAtr] ?? null;
+    const adxVal = adxAll[i - offAdx] ?? null;
+    const bb = bbAll[i - offBb];
+    const bbWidthPct = (bb && bb.middle) ? ((bb.upper - bb.lower) / bb.middle) * 100 : null;
+    const stoch = stochAll[i - offStoch];
+    const psarVal = psarAll[i - offPsar];
+    const psarDir = (psarVal != null) ? (currentPrice > psarVal ? 'up' : 'down') : null;
+    const atrMa = atrMaAll[(i - offAtr) - offAtrMa] ?? null;
+    const atrMaLong = atrMaLongAll[(i - offAtr) - offAtrMaLong] ?? null;
+    const atrRatio = (atrVal != null && atrMaLong) ? atrVal / atrMaLong : null;
     const threshold = atrVal && atrVal > 0 ? atrVal * 0.3 : 0;
     const nearSupport = threshold > 0 && Math.abs(currentPrice - sl) <= threshold;
     const nearResistance = threshold > 0 && Math.abs(currentPrice - sh) <= threshold;
@@ -269,6 +357,12 @@ function precalc(candles) {
         histogramTrend: (macdAll[i - offMacd]?.histogram ?? 0) > 0 ? 'positive' : 'negative',
       },
       atr: atrVal,
+      adx: adxVal,
+      bbWidthPct,
+      stoch: stoch ? { k: stoch.k, d: stoch.d } : null,
+      psarDir,
+      atrMa,
+      atrRatio,
       swingHigh: sh, swingLow: sl, nearSupport, nearResistance,
       h4Trend,
     };

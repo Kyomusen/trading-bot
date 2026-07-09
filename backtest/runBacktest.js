@@ -101,7 +101,7 @@ function runBacktestForCandles(symbolConfig, candles) {
           trailPos,
           pos.direction === 'BUY' ? candles[i].high : candles[i].low,
           atrNow,
-          sc,
+          pos.trailingDistance != null ? { ...sc, trailingDistance: pos.trailingDistance } : sc,
           { spreadPrice }
         );
         pos.stopLevel = newStop;
@@ -171,6 +171,9 @@ function runBacktestForCandles(symbolConfig, candles) {
         stopLevel: stopUsed, entryPrice: entryUsed,
       });
       if (!dealReference) continue; // margin ไม่พอเปิด → ข้าม
+      // เก็บ trailing distance ที่ปรับตาม regime ไว้บน position เพื่อใช้ใน trailing loop
+      const openedPos = broker.positions.get(dealReference);
+      if (openedPos) openedPos.trailingDistance = signal.trailingDistance;
 
       const riskAmt = broker.balance * ((symbolConfig.riskPercent ?? config.sizing.fixedRisk.riskPercent) / 100);
       const actualRisk = clampedSize * slDist;

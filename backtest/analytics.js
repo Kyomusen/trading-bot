@@ -62,10 +62,31 @@ function analyze(trades, { startingBalance = 1000 } = {}) {
     (byYear[y] = byYear[y] || []).push(t);
     (byHour[h] = byHour[h] || []).push(t);
   }
-  const monthly = Object.keys(byMonth).sort().map((k) => ({
-    period: k, trades: byMonth[k].length, pf: groupPF(byMonth[k]),
-    profit: r2(byMonth[k].reduce((s, t) => s + t.pnl, 0)),
-  }));
+  // ----- Monthly return % (on running balance at month boundaries) -----
+  // running balance per trade (same curve used for DD; ignores withdrawals by design)
+  const balByMonth = {};
+  {
+    let rb = startingBalance;
+    for (const tr of closed) {
+      const d = new Date(tr.closedAt);
+      const m = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+      if (!balByMonth[m]) balByMonth[m] = { start: rb, end: rb, first: true };
+      if (balByMonth[m].first) { balByMonth[m].start = rb; balByMonth[m].first = false; }
+      rb += tr.pnl;
+      balByMonth[m].end = rb;
+    }
+  }
+
+  const monthly = Object.keys(byMonth).sort().map((k) => {
+    const rows = byMonth[k];
+    const bb = balByMonth[k];
+    const ret = bb.start > 0 ? (bb.end - bb.start) / bb.start : 0;
+    return {
+      period: k, trades: rows.length, pf: groupPF(rows),
+      profit: r2(rows.reduce((s, t) => s + t.pnl, 0)),
+      returnPct: pct(ret),
+    };
+  });
   const yearly = Object.keys(byYear).sort().map((k) => ({
     period: k, trades: byYear[k].length, pf: groupPF(byYear[k]),
     profit: r2(byYear[k].reduce((s, t) => s + t.pnl, 0)),
