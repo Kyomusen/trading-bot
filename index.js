@@ -2,6 +2,8 @@
 // entrypoint: node index.js live   -> รันเทรดสด
 //             node index.js backtest -> รัน backtest ทุก symbol ใน config
 
+require('dotenv').config();
+
 const mode = process.argv[2];
 
 async function main() {

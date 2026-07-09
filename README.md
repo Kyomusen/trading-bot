@@ -50,9 +50,9 @@ trading-bot/
 
 ```bash
 npm install
-cp .env.example .env   # แล้วกรอกค่าจริง
+cp .env.example .env   # แล้วกรอกค่าจริง (ไฟล์ต้องอยู่ในโฟลเดอร์ root ของ repo)
 npm run backtest        # รัน backtest ทุก symbol ใน config.symbols
-npm run live             # รันเทรดสด (ต้องมี .env ครบก่อน)
+npm run live             # รันเทรดสด (dotenv โหลด .env อัตโนมัติ — ไม่ต้อง source .env มือ)
 ```
 
 ## ไม่ได้เอามาจาก GPT proposal (ตั้งใจ)

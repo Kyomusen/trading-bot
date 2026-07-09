@@ -43,7 +43,7 @@ index.js (entry: mode = live | backtest)
 ## Key Conventions
 
 - **CommonJS** modules (not ESM)
-- **.env** loaded via `process.env` (no dotenv dependency) — keys: `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_PASSWORD`, `CAPITAL_ENV`, `DISCORD_WEBHOOK_URL`
+- **.env** loaded via `dotenv` (`require('dotenv').config()` at top of `index.js`) into `process.env` — keys: `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_PASSWORD`, `CAPITAL_ENV`, `DISCORD_WEBHOOK_URL`
 - **Live/Backtest share same path**: signals → sizing → engine → notify. Only broker differs (capitalClient vs brokerSimulator)
 - **TradeEvent is immutable** (`Object.freeze`) — all calculation done before notify/. sender.js has zero business logic
 - **Sizing is pluggable** — swap via `config.sizingMethod` without touching engine

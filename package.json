@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "axios": "^1.7.0",
+    "dotenv": "^17.4.2",
     "dukascopy-node": "^1.43.0",
     "lzma-native": "^8.0.6",
     "technicalindicators": "^3.1.0",
