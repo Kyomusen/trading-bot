@@ -19,21 +19,14 @@
 
 const WebSocket = require('ws');
 const EventEmitter = require('events');
-const config = require('../config');
 const broker = require('./capitalClient');
-
-function streamingHost() {
-  // demo-api-capital.backend-capital.com  → demo-api-streaming-capital.backend-capital.com
-  const base = config.capital.baseUrl || 'https://demo-api-capital.backend-capital.com';
-  return base.replace('api-capital', 'api-streaming-capital').replace(/^http/, 'ws');
-}
 
 class CapitalStream extends EventEmitter {
   constructor({ epic, brokerEpic }) {
     super();
     this.epic = epic;
     this.brokerEpic = brokerEpic || epic;
-    this.host = streamingHost();
+    this.host = broker.streamingHost || null;
     this.ws = null;
     this.ready = false;
     this.reconnectDelay = 2000;
@@ -44,7 +37,10 @@ class CapitalStream extends EventEmitter {
   async connect() {
     try {
       await broker.ensureSession();
-      const url = `${this.host}/connect`;
+      const host = broker.streamingHost;
+      if (!host) throw new Error('streamingHost not provided by session response');
+      this.host = host;
+      const url = `${host}/connect`;
       this.ws = new WebSocket(url);
       this.ws.on('open', () => this._onOpen());
       this.ws.on('message', (data) => this._onMessage(data));
@@ -124,4 +120,4 @@ class CapitalStream extends EventEmitter {
   }
 }
 
-module.exports = { CapitalStream, streamingHost };
+module.exports = { CapitalStream };
