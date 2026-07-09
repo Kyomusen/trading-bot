@@ -44,7 +44,7 @@ trading-bot/
 - [ ] `sizing/confidenceBased.js` — ยังเป็น placeholder เชิงเส้น รอออกแบบ metric confidence จริง
 - [ ] `notify/chart.js` — ย้าย logic Bresenham line drawing + EMA overlay จาก chart.js เดิม
 - [ ] `backtest/runBacktest.js` → `loadHistoricalCandles()` — ชี้ไปยัง historical data จริง (JSON ต่อ epic ใน `config.backtest.dataPath`)
-- [ ] ทดสอบ `engine/positionManager.js` เทียบกับพฤติกรรม `calcTrailingStop`/`calcAdaptiveMultiplier` เดิม ว่าให้ผลตรงกันก่อน deploy จริง
+- [ ] ทดสอบ `engine/positionManager.js` (`calcTrailingStop`) ว่าให้ผลตรงตามออกแบบก่อน deploy จริง
 
 ## รันยังไง
 
