@@ -17,7 +17,7 @@ trading-bot/
 │   ├── confidenceBased.js      # placeholder รอออกแบบ metric
 │   └── index.js                # เลือกวิธีตาม config.sizingMethod + clamp maxDealSize
 ├── engine/
-│   ├── positionManager.js      # trailing stop + adaptive multiplier
+│   ├── positionManager.js      # trailing stop (calcTrailingStop)
 │   └── tradeEvent.js           # สร้าง TradeEvent (immutable) — จุดเดียวที่คำนวณ PnL
 ├── live/runLive.js             # loop เทรดสด ใช้ capitalClient
 ├── backtest/runBacktest.js     # loop จำลอง ใช้ brokerSimulator, logic เดียวกับ live

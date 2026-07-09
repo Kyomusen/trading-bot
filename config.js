@@ -154,11 +154,6 @@ module.exports = {
       enabled: true,
       atrMultiplier: 1.5,
     },
-    adaptiveMultiplier: {
-      enabled: true,
-      minMultiplier: 1.0,
-      maxMultiplier: 2.5,
-    },
     maxDealSizeSafetyMargin: 0.95,
   },
 

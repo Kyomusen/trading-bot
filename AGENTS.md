@@ -24,7 +24,7 @@ index.js (entry: mode = live | backtest)
 │   ├── fixedRisk.js           — (balance × riskPercent) / slDistance
 │   └── confidenceBased.js     — risk% scales with signal.confidence (placeholder)
 ├── engine/
-│   ├── positionManager.js     — calcTrailingStop + calcAdaptiveMultiplier
+│   ├── positionManager.js     — calcTrailingStop
 │   └── tradeEvent.js          — TradeEvent (immutable, Object.freeze) — PnL calculation
 ├── live/runLive.js            — Loop live: poll API → signals → sizing → order → notify
 ├── backtest/runBacktest.js    — Loop backtest: same logic, uses brokerSimulator
