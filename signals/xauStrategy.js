@@ -1,14 +1,6 @@
 const { RSI, EMA, MACD, ATR } = require('technicalindicators');
 const config = require('../config');
 
-const SYMBOL = 'XAUUSD';
-
-let _symCfg = null;
-function symCfg() {
-  if (!_symCfg) _symCfg = config.symbols.find(s => s.epic === SYMBOL) || {};
-  return _symCfg;
-}
-
 function pipToPrice(pips) {
   return pips * 0.01;
 }
@@ -66,12 +58,12 @@ function calcInd(candles) {
   return { ...last, swingHigh, swingLow, nearSupport, nearResistance };
 }
 
-function evaluate(candles) {
-  return _evaluate(candles, null, null);
+function evaluate(candles, epic) {
+  return _evaluate(candles, null, null, epic);
 }
 
-function _evaluate(candles, pc, idx) {
-  const sc = symCfg();
+function _evaluate(candles, pc, idx, epic) {
+  const sc = config.symbols.find(s => s.epic === epic) || {};
   if (!sc || !sc.enabled) return null;
 
   // session filter สำหรับ generate signal เท่านั้น (1 = 24/7, null = ไม่จำกัด)
@@ -201,7 +193,7 @@ function h4EmaAt(hj, runningClose, emaFull, period, h4ClosesAll) {
   return runningClose * alpha + prev * (1 - alpha);
 }
 
-function precalc(candles) {
+function precalc(candles, epic) {
   const n = candles.length;
   if (n < 60) return [];
   const high = candles.map(c => c.high);
@@ -284,8 +276,8 @@ function precalc(candles) {
   return result;
 }
 
-function evaluatePrecalc(candles, pc, idx) {
-  return _evaluate(candles, pc, idx);
+function evaluatePrecalc(candles, pc, idx, epic) {
+  return _evaluate(candles, pc, idx, epic);
 }
 
 module.exports = { name: 'xauTrend', evaluate, precalc, evaluatePrecalc, calcInd, h4FromH1 };

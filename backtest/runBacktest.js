@@ -49,7 +49,7 @@ function runBacktestForCandles(symbolConfig, candles) {
   const openTradeMap = new Map();
   const offset = 50;
   let lastMaxLot = 0.01;
-  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles) : null;
+  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles, epic) : null;
 
   for (let i = offset; i < candles.length; i++) {
     broker.tick(candles[i]);
@@ -80,7 +80,7 @@ function runBacktestForCandles(symbolConfig, candles) {
     const pc = precalc?.[i];
     const atrNow = pc?.atr;
     if (atrNow && broker.positions.size > 0) {
-      const spr = getSpread(candles[i]);
+      const spr = getSpread(candles[i], epic);
       const spreadPrice = spr > 0 ? spr : undefined;
       for (const [dealId, pos] of broker.positions) {
         const openEvent = openTradeMap.get(dealId);
@@ -107,11 +107,11 @@ function runBacktestForCandles(symbolConfig, candles) {
     // Signals using precalc
     let signals;
     if (xauStrategy.evaluatePrecalc && precalc?.[i]) {
-      const s = xauStrategy.evaluatePrecalc(candles, precalc, i);
+      const s = xauStrategy.evaluatePrecalc(candles, precalc, i, epic);
       signals = s ? [s] : [];
     } else {
       const window = candles.slice(Math.max(0, i - 100 + 1), i + 1);
-      signals = evaluateAll(window);
+      signals = evaluateAll(window, epic);
     }
     if (signals.length === 0) continue;
 
@@ -135,7 +135,7 @@ function runBacktestForCandles(symbolConfig, candles) {
       // คิด spread symmetric ทั้งสองฝั่ง (SELL หักในทิศตรงข้ามกับ BUY)
       let entryUsed = signal.entry;
       let stopUsed = signal.stopLoss;
-      const liveSpread = getSpread(candles[i]);
+      const liveSpread = getSpread(candles[i], epic);
       if (liveSpread > 0) {
         if (signal.direction === 'BUY') {
           entryUsed += liveSpread;

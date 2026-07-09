@@ -1,6 +1,6 @@
 const config = require('../config');
 
-function getSpread(candle, epic = 'XAUUSD') {
+function getSpread(candle, epic) {
   if (!candle || candle.bid === undefined) return 0;
   const raw = candle.ask - candle.bid;
   if (raw <= 0) return 0;

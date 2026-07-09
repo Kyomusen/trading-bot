@@ -20,7 +20,7 @@ function runDetailed(epic, candlesSubset) {
   const trades = [];
   const openTradeMap = new Map();
   const offset = 50;
-  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles) : null;
+  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles, epic) : null;
   const equityCurve = [{ time: candles[0]?.timestamp, equity: broker.balance, balance: broker.balance }];
 
   for (let i = offset; i < candles.length; i++) {
@@ -66,10 +66,10 @@ function runDetailed(epic, candlesSubset) {
     // signals
     let signals;
     if (xauStrategy.evaluatePrecalc && precalc?.[i]) {
-      const s = xauStrategy.evaluatePrecalc(candles, precalc, i);
+      const s = xauStrategy.evaluatePrecalc(candles, precalc, i, epic);
       signals = s ? [s] : [];
     } else {
-      signals = evaluateAll(candles.slice(Math.max(0, i - 100 + 1), i + 1));
+      signals = evaluateAll(candles.slice(Math.max(0, i - 100 + 1), i + 1), epic);
     }
     if (signals.length > 0) {
       for (const signal of signals) {

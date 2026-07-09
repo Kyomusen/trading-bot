@@ -26,7 +26,7 @@ function runDetailed({ candles, trailingAct, trailingDist, maxLot, spreadPips, s
   const offset = 50;
   const effSc = applyTrailingOverrides(sc, trailingAct, trailingDist);
   const mLot = maxLot != null ? maxLot : null; // override: ใช้ fixed แบบเดิม; ถ้าไม่ให้ใช้ dynamic จาก balance
-  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles) : null;
+  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles, epic) : null;
   const equityCurve = [{ time: candles[0]?.timestamp, equity: broker.balance, balance: broker.balance }];
   const slip = slippagePips ?? 0;
   const marginStop = marginCallFrac ? startBal * marginCallFrac : 0;
@@ -59,7 +59,7 @@ function runDetailed({ candles, trailingAct, trailingDist, maxLot, spreadPips, s
     if (marginCallFrac) {
       let mtm = 0;
       for (const [, pos] of broker.positions) {
-        const price = getSpread(candles[i]) > 0
+        const price = getSpread(candles[i], epic) > 0
           ? (pos.direction === 'BUY' ? candles[i].bid : candles[i].ask)
           : candles[i].close;
         mtm += (pos.direction === 'BUY' ? 1 : -1) * (price - pos.entryPrice) * pos.size;
@@ -68,7 +68,7 @@ function runDetailed({ candles, trailingAct, trailingDist, maxLot, spreadPips, s
       if (equity < marginStop) {
         // Force-close all positions at market
         for (const [dealId, pos] of broker.positions) {
-          const exitPrice = getSpread(candles[i]) > 0
+          const exitPrice = getSpread(candles[i], epic) > 0
             ? (pos.direction === 'BUY' ? candles[i].bid : candles[i].ask)
             : candles[i].close;
           broker._settle(dealId, exitPrice, 'MARGIN_CALL');
@@ -98,7 +98,7 @@ function runDetailed({ candles, trailingAct, trailingDist, maxLot, spreadPips, s
     const pc = precalc?.[i];
     const atrNow = pc?.atr;
     if (atrNow && broker.positions.size > 0) {
-      const liveSpr = getSpread(candles[i]);
+      const liveSpr = getSpread(candles[i], epic);
       const spreadPrice = liveSpr > 0 ? liveSpr : undefined;
       for (const [dealId, pos] of broker.positions) {
         const openEvent = openTradeMap.get(dealId);
@@ -125,16 +125,16 @@ function runDetailed({ candles, trailingAct, trailingDist, maxLot, spreadPips, s
     // signals
     let signals;
     if (xauStrategy.evaluatePrecalc && precalc?.[i]) {
-      const s = xauStrategy.evaluatePrecalc(candles, precalc, i);
+      const s = xauStrategy.evaluatePrecalc(candles, precalc, i, epic);
       signals = s ? [s] : [];
     } else {
-      signals = require('../signals').evaluateAll(candles.slice(Math.max(0, i - 100 + 1), i + 1));
+      signals = require('../signals').evaluateAll(candles.slice(Math.max(0, i - 100 + 1), i + 1), epic);
     }
     if (signals.length > 0) {
       for (const signal of signals) {
         let entry = signal.entry;
         let stopLevel = signal.stopLoss;
-        const liveSpread = getSpread(candles[i]);
+        const liveSpread = getSpread(candles[i], epic);
         if (liveSpread > 0 && signal.direction === 'BUY') {
           entry += liveSpread;
           stopLevel += liveSpread;
@@ -168,7 +168,7 @@ function runDetailed({ candles, trailingAct, trailingDist, maxLot, spreadPips, s
     // equity curve
     let mtm = 0;
     for (const [, pos] of broker.positions) {
-      const price = getSpread(candles[i]) > 0
+      const price = getSpread(candles[i], epic) > 0
         ? (pos.direction === 'BUY' ? candles[i].bid : candles[i].ask)
         : candles[i].close;
       mtm += (pos.direction === 'BUY' ? 1 : -1) * (price - pos.entryPrice) * pos.size;

@@ -97,7 +97,7 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
     return;
   }
 
-  const signals = evaluateAll(candles);
+  const signals = evaluateAll(candles, epic);
   if (signals.length === 0) return;
 
   const baseMaxLot = resolveMaxLot(symbolConfig, balance, signals[0].entry);

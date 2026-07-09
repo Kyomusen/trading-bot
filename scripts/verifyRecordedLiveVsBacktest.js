@@ -48,13 +48,13 @@ const broker = new BrokerSimulator({ startingBalance: config.backtest.startingBa
 const trackerCloses = [];
 const tracker = new PositionTracker({ symbolConfig: symCfg, onClose: (e) => trackerCloses.push(e) });
 const offset = 50;
-const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles) : null;
+const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles, EPIC) : null;
 for (let i = offset; i < candles.length; i++) {
   broker.tick(candles[i]);
   const atrNow = precalc?.[i]?.atr;
   if (atrNow) tracker.setAtr(atrNow);
   if (atrNow && broker.positions.size > 0) {
-    const spr = getSpread(candles[i]);
+    const spr = getSpread(candles[i], EPIC);
     for (const [dealId, pos] of broker.positions) {
       const tp = { direction: pos.direction, entryPrice: pos.entryPrice, currentStopLevel: pos.stopLevel, bestPrice: pos.bestPrice != null ? pos.bestPrice : pos.entryPrice };
       const ns = require('../engine/positionManager').calcTrailingStop(tp, pos.direction === 'BUY' ? candles[i].high : candles[i].low, atrNow, symCfg, { spreadPrice: spr > 0 ? spr : undefined });
@@ -63,12 +63,12 @@ for (let i = offset; i < candles.length; i++) {
   }
   if (atrNow) tracker.onPrice({ epic: EPIC, bid: candles[i].bid, ask: candles[i].ask, high: candles[i].high, low: candles[i].low, timestamp: candles[i].timestamp });
   let signals;
-  if (xauStrategy.evaluatePrecalc && precalc?.[i]) { const s = xauStrategy.evaluatePrecalc(candles, precalc, i); signals = s ? [s] : []; }
-  else { const w = candles.slice(Math.max(0, i - 100 + 1), i + 1); signals = require('../signals').evaluateAll(w); }
+  if (xauStrategy.evaluatePrecalc && precalc?.[i]) { const s = xauStrategy.evaluatePrecalc(candles, precalc, i, EPIC); signals = s ? [s] : []; }
+  else { const w = candles.slice(Math.max(0, i - 100 + 1), i + 1); signals = require('../signals').evaluateAll(w, EPIC); }
   if (signals.length === 0) continue;
   if (broker.positions.size >= (config.risk?.maxConcurrentTrades ?? Infinity)) continue;
   for (const signal of signals) {
-    const liveSpread = getSpread(candles[i]);
+    const liveSpread = getSpread(candles[i], EPIC);
     let entryUsed = signal.entry, stopUsed = signal.stopLoss;
     if (liveSpread > 0) { if (signal.direction === 'BUY') { entryUsed += liveSpread; stopUsed += liveSpread; } else { entryUsed -= liveSpread; stopUsed -= liveSpread; } }
     const slDist = Math.abs(entryUsed - stopUsed); if (slDist <= 0) continue;

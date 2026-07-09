@@ -2,9 +2,9 @@ const xauStrategy = require('./xauStrategy');
 
 const strategies = [xauStrategy];
 
-function evaluateAll(candles) {
+function evaluateAll(candles, epic) {
   return strategies
-    .map((s) => s.evaluate(candles))
+    .map((s) => s.evaluate(candles, epic))
     .filter(Boolean);
 }
 

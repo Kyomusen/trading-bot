@@ -95,7 +95,7 @@ function decisionPass() {
   const atrNow = a[a.length - 1];
   if (!atrNow) return;
   tracker.setAtr(atrNow);
-  const signals = evaluateAll(candles);
+  const signals = evaluateAll(candles, EPIC);
   if (!signals.length) return;
   if (broker.positions.size >= (config.risk?.maxConcurrentTrades ?? Infinity)) return;
   const openTs = candles[candles.length - 1].timestamp; // บาร์ที่สัญญาณเกิด (ตรงกับ backtest openedAt)
