@@ -8,6 +8,7 @@ const { calcPositionSize, resolveMaxLot } = require('../sizing');
 const { createTradeEvent, closeTradeEvent } = require('../engine/tradeEvent');
 const { calcTrailingStop } = require('../engine/positionManager');
 const { getSpread } = require('../broker/spreadHelper');
+const { analyze } = require('./analytics');
 
 // คีย์งวดสำหรับถอนกำไร ('monthly' => YYYY-MM, 'quarterly' => YYYY-Qn, อื่นๆ => null)
 function periodKey(ts, freq) {
@@ -20,7 +21,9 @@ function periodKey(ts, freq) {
 }
 
 function loadHistoricalCandles(epic) {
-  const filePath = path.join(config.backtest.dataPath, `${epic}.json`);
+  // ใช้ไฟล์ bid/ask (เช่น XAUUSD_bidask.json) ถ้ามี มิฉะนั้นตกไปใช้ OHLC ธรรมดา
+  const bidask = path.join(config.backtest.dataPath, `${epic}_bidask.json`);
+  const filePath = fs.existsSync(bidask) ? bidask : path.join(config.backtest.dataPath, `${epic}.json`);
   return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
 }
 
@@ -58,23 +61,25 @@ function runBacktestForCandles(symbolConfig, candles) {
     // พอถึงเป้าแล้วถอนเฉพาะส่วนที่เกินระดับทุนที่ตั้งไว้ รายไตรมาส
     const wKey = periodKey(candles[i].timestamp, withdrawFreq);
     if (wKey && wKey !== lastWKey) {
-      if (lastWKey !== null && broker.balance >= target) broker.withdrawProfitAbove(target);
+        if (lastWKey !== null && broker.balance >= target) {
+          broker.withdrawProfitAbove(target);
+        }
       lastWKey = wKey;
     }
 
     for (const settled of broker.settledPositions.splice(0)) {
-      const openEvent = openTradeMap.get(settled.dealId);
-      if (!openEvent) continue;
-      trades.push(closeTradeEvent(openEvent, {
-        closedAt: candles[i].timestamp,
-        exitPrice: settled.exitPrice,
-        exitReason: settled.exitReason,
-        balance: broker.balance - settled.pnl,
-      }));
-      openTradeMap.delete(settled.dealId);
-    }
+          const openEvent = openTradeMap.get(settled.dealId);
+          if (!openEvent) continue;
+          trades.push(closeTradeEvent(openEvent, {
+            closedAt: candles[i].timestamp,
+            exitPrice: settled.exitPrice,
+            exitReason: settled.exitReason,
+            balance: broker.balance - settled.pnl,
+          }));
+          openTradeMap.delete(settled.dealId);
+        }
 
-    if (broker.balance <= 0) break;
+        if (broker.balance <= 0) break;
 
     // Trailing stop (จุดเดียวผ่าน positionManager)
     const pc = precalc?.[i];
@@ -157,7 +162,7 @@ function runBacktestForCandles(symbolConfig, candles) {
         symbolConfig,
       });
 
-      const effMaxLot = resolveMaxLot(sc, broker.balance, entryUsed);
+      let effMaxLot = resolveMaxLot(sc, broker.balance, entryUsed);
       lastMaxLot = effMaxLot;
       const clampedSize = Math.max(0.0001, Math.min(size, effMaxLot));
 
@@ -171,7 +176,7 @@ function runBacktestForCandles(symbolConfig, candles) {
       const actualRisk = clampedSize * slDist;
       const tradeEvent = createTradeEvent({
         strategy: signal.strategy, epic, direction: signal.direction,
-        entry: signal.entry, stopLoss: stopLevel, takeProfit: null,
+        entry: entryUsed, stopLoss: stopUsed, takeProfit: null,
         size: clampedSize,
         riskAmount: Math.min(riskAmt, actualRisk),
         confidence: signal.confidence,
@@ -258,7 +263,69 @@ function run() {
     return { epic: r.epic, ...rest };
   });
   console.table(rows);
+  writeBacktestOutputs(results);
   return results;
+}
+
+// เขียนผลลัพธ์ลงไฟล์: JSON summary ต่อ symbol + CSV รายเทรด (เฉพาะที่ปิดแล้ว)
+function writeBacktestOutputs(results) {
+  const outputDir = config.backtest.outputDir || './backtest/output';
+  fs.mkdirSync(outputDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+  let totalTrades = 0;
+  for (const r of results) {
+    const { trades } = r.result;
+    const closed = trades.filter((t) => t.pnl != null);
+    totalTrades += closed.length;
+    const csvPath = path.join(outputDir, `trades_${r.epic}_${stamp}.csv`);
+    writeTradesCsv(csvPath, closed);
+
+    const analysis = analyze(closed, { startingBalance: config.backtest.startingBalance });
+    printAnalysis(r.epic, analysis);
+
+    const summaryPath = path.join(outputDir, `summary_${r.epic}_${stamp}.json`);
+    const { trades: _omit, ...summary } = r.result;
+    const full = { ...summary, analysis };
+    fs.writeFileSync(summaryPath, JSON.stringify(full, null, 2));
+  }
+
+  console.log(`[backtest] results written to ${outputDir} (${totalTrades} closed trades)`);
+}
+
+function writeTradesCsv(filePath, trades) {
+  if (trades.length === 0) return;
+  const cols = [
+    'epic', 'strategy', 'direction', 'entry', 'stopLoss', 'takeProfit',
+    'size', 'riskAmount', 'confidence', 'openedAt', 'closedAt',
+    'exitPrice', 'pnl', 'pnlPercent', 'exitReason',
+  ];
+  const lines = [cols.join(',')];
+  for (const t of trades) {
+    const row = cols.map((c) => {
+      const v = t[c];
+      if (v == null) return '';
+      if (typeof v === 'object') return JSON.stringify(v).replace(/"/g, "'");
+      return String(v);
+    });
+    lines.push(row.join(','));
+  }
+  fs.writeFileSync(filePath, lines.join('\n'));
+}
+
+function printAnalysis(epic, a) {
+  if (a.error) return;
+  console.log(`\n=== Analytics: ${epic} ===`);
+  console.log(`Max Drawdown      : ${a.maxDrawdownUsd} USD (${a.maxDrawdownPct}%)`);
+  console.log(`Win / Loss streak : ${a.maxWinStreak} / ${a.maxLossStreak}`);
+  console.log(`Expectancy/trade  : ${a.expectancyUsd} USD  (R-expectancy ${a.rExpectancy})`);
+  console.log(`Sharpe / Sortino  : ${a.sharpe} / ${a.sortino}`);
+  console.log(`STOP_LOSS breakdown: total ${a.stopLossBreakdown.total} | trailing wins ${a.stopLossBreakdown.trailingWins} | real losses ${a.stopLossBreakdown.realLosses}`);
+  const worstYear = [...a.yearly].sort((x, y) => x.profit - y.profit)[0];
+  const bestYear = [...a.yearly].sort((x, y) => y.profit - x.profit)[0];
+  console.log(`Worst year        : ${worstYear.period} profit ${worstYear.profit} PF ${worstYear.pf}`);
+  console.log(`Best year         : ${bestYear.period} profit ${bestYear.profit} PF ${bestYear.pf}`);
+  console.log(`Years with PF<1   : ${a.yearly.filter((y) => y.pf != null && y.pf < 1).map((y) => y.period).join(', ') || 'none'}`);
 }
 
 module.exports = { run, runBacktestForSymbol, runBacktestForCandles };

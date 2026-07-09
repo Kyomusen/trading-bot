@@ -157,7 +157,7 @@ module.exports = {
     maxDealSizeSafetyMargin: 0.95,
   },
 
-  // ===== Risk guardrails =====
+    // ===== Risk guardrails =====
   risk: {
     maxConcurrentTrades: 5,
   },
@@ -170,7 +170,7 @@ module.exports = {
     stopOutLevel: 0.5,     // บังคับปิดเมื่อ margin level (equity/usedMargin) ตกถึง 50% (มาตรฐาน retail)
     withdraw: {
       frequency: 'quarterly', // 'monthly' | 'quarterly' | null(ไม่ถอน)
-      targetMultiple: 5,     // ไม่ถอนจนกว่าพอร์ตจะโตถึง 5× ของเงินเริ่มต้น ค่อยเริ่มถอนเป็นรอบ
+      targetMultiple: 5,     // ไม่ถอนจนกว่าพอร์ตจะโตถึง 5× ของเงินเริ่มต้น
       // เมื่อถึงเป้า: ถอนเฉพาะส่วนที่เกินระดับทุนที่ตั้งไว้ (target = startingBalance × targetMultiple) รายไตรมาส
     },
   },
@@ -187,6 +187,7 @@ module.exports = {
   backtest: {
     startingBalance: 1000,
     dataPath: './data/historical',
+    outputDir: './backtest/output', // ไฟล์ผลลัพธ์ (JSON summary + CSV รายเทรด) จะเขียนลงที่นี่
     exitOnOppositeSignal: false, // ทดสอบ: ปิดออเดอร์เมื่อมีสัญญาณสวนทาง (default ปิดเฉพาะเมื่อ hit SL/TSL เหมือนเดิม)
   },
 

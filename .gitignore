@@ -14,6 +14,9 @@ trading-bot.zip
 *.log
 npm-debug.log*
 
+# ===== Backtest output (ไฟล์ผลลัพธ์ที่ generate ตอนรัน) =====
+backtest/output/
+
 # ===== OS / editor =====
 .DS_Store
 .idea/

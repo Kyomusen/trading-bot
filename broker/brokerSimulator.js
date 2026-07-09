@@ -72,7 +72,11 @@ class BrokerSimulator {
         (pos.direction === 'BUY' ? candle.high >= pos.profitLevel : candle.low <= pos.profitLevel);
 
       if (hitStop) {
-        this._settle(dealId, pos.stopLevel, 'STOP_LOSS');
+        // แยกป้าย: ถ้า stop โดนเลื่อนเข้ามาในจุดกำไร (trailing) ให้ชื่อ TRAILING_STOP
+        // ถ้ายังอยู่เหนือ/ต่ำกว่าราคาเปิด (SL จริง) ให้ชื่อ STOP_LOSS
+        const inProfit =
+          pos.direction === 'BUY' ? pos.stopLevel > pos.entryPrice : pos.stopLevel < pos.entryPrice;
+        this._settle(dealId, pos.stopLevel, inProfit ? 'TRAILING_STOP' : 'STOP_LOSS');
       } else if (hitTarget) {
         this._settle(dealId, pos.profitLevel, 'TAKE_PROFIT');
       }
