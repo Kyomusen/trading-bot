@@ -49,7 +49,7 @@ function runBacktestForCandles(symbolConfig, candles) {
   const openTradeMap = new Map();
   const offset = 50;
   let lastMaxLot = 0.01;
-  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles, epic) : null;
+  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles) : null;
 
   for (let i = offset; i < candles.length; i++) {
     broker.tick(candles[i]);

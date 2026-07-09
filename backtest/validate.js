@@ -26,7 +26,7 @@ function runDetailed({ candles, trailingAct, trailingDist, maxLot, spreadPips, s
   const offset = 50;
   const effSc = applyTrailingOverrides(sc, trailingAct, trailingDist);
   const mLot = maxLot != null ? maxLot : null; // override: ใช้ fixed แบบเดิม; ถ้าไม่ให้ใช้ dynamic จาก balance
-  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles, epic) : null;
+  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles) : null;
   const equityCurve = [{ time: candles[0]?.timestamp, equity: broker.balance, balance: broker.balance }];
   const slip = slippagePips ?? 0;
   const marginStop = marginCallFrac ? startBal * marginCallFrac : 0;

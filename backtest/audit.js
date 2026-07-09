@@ -20,7 +20,7 @@ function runDetailed(epic, candlesSubset) {
   const trades = [];
   const openTradeMap = new Map();
   const offset = 50;
-  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles, epic) : null;
+  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles) : null;
   const equityCurve = [{ time: candles[0]?.timestamp, equity: broker.balance, balance: broker.balance }];
 
   for (let i = offset; i < candles.length; i++) {

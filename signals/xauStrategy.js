@@ -193,7 +193,7 @@ function h4EmaAt(hj, runningClose, emaFull, period, h4ClosesAll) {
   return runningClose * alpha + prev * (1 - alpha);
 }
 
-function precalc(candles, epic) {
+function precalc(candles) {
   const n = candles.length;
   if (n < 60) return [];
   const high = candles.map(c => c.high);

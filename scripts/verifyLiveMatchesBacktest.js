@@ -37,7 +37,7 @@ function verify(symbolConfig) {
   const tracker = new PositionTracker({ symbolConfig: sc, onClose: (ev) => trackerCloses.push(ev) });
 
   const offset = 50;
-  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles, epic) : null;
+  const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles) : null;
 
   for (let i = offset; i < candles.length; i++) {
     broker.tick(candles[i]); // canonical: เช็ค hit SL (ด้วย stop เดิม) + margin call

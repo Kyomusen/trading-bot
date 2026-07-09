@@ -48,7 +48,7 @@ const broker = new BrokerSimulator({ startingBalance: config.backtest.startingBa
 const trackerCloses = [];
 const tracker = new PositionTracker({ symbolConfig: symCfg, onClose: (e) => trackerCloses.push(e) });
 const offset = 50;
-const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles, EPIC) : null;
+const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles) : null;
 for (let i = offset; i < candles.length; i++) {
   broker.tick(candles[i]);
   const atrNow = precalc?.[i]?.atr;
