@@ -68,12 +68,13 @@ function formatHeartbeat({ uptime, symbols, balance, lossStreak }) {
     if (sym.indicators) {
       const ind = sym.indicators;
       const parts = [];
-      parts.push(`RSI ${ind.rsi?.toFixed(1)}`);
-      parts.push(`EMA20 ${ind.ema20?.toFixed(1)}`);
-      parts.push(`EMA50 ${ind.ema50?.toFixed(1)}`);
+      if (ind.rsi != null) parts.push(`RSI ${ind.rsi.toFixed(1)}`);
+      if (ind.ema20 != null) parts.push(`EMA20 ${ind.ema20.toFixed(1)}`);
+      if (ind.ema50 != null) parts.push(`EMA50 ${ind.ema50.toFixed(1)}`);
       if (ind.atr != null) parts.push(`ATR ${ind.atr.toFixed(2)}`);
       if (ind.adx != null) parts.push(`ADX ${ind.adx.toFixed(1)}`);
-      if (ind.macd != null) parts.push(`MACD ${ind.macd > 0 ? '+' : ''}${ind.macd.toFixed(2)}`);
+      const macdVal = ind.macdHist != null ? ind.macdHist : ind.macd;
+      if (macdVal != null && typeof macdVal === 'number') parts.push(`MACD ${macdVal > 0 ? '+' : ''}${macdVal.toFixed(2)}`);
       lines.push(parts.join(' · '));
     }
 

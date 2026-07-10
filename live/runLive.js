@@ -14,6 +14,7 @@ const discordFormatter = require('../notify/discord/formatter');
 const discordSender = require('../notify/discord/sender');
 const { readState, writeState } = require('./state');
 const { logEvent, logCandle, logSignal, logTrade } = require('./liveLogger');
+const { generateChartPng } = require('../notify/chart');
 
 const POLL_MS = 5 * 60 * 1000;
 const trackers = new Map();
@@ -295,6 +296,7 @@ async function sendHeartbeat() {
             atr: ind.atr,
             adx: ind.adx,
             macd: ind.macd,
+            macdHist: ind.macd?.histogram ?? (typeof ind.macd === 'number' ? ind.macd : undefined),
           };
         }
       } catch {}
@@ -327,9 +329,23 @@ async function sendHeartbeat() {
   const uptimeStr = `${h}h ${m}m`;
 
   const payload = discordFormatter.formatHeartbeat({ uptime: uptimeStr, symbols, balance, lossStreak: global.__lossStreak });
+
+  let chartFile = null;
   try {
-    await discordSender.send(payload);
-    logEvent('system', { type: 'heartbeat', balance, positions: symbols.reduce((a, s) => a + s.positions.length, 0) });
+    const primaryEpic = (config.symbols.find((s) => s.enabled) || {}).epic;
+    if (primaryEpic) {
+      const candles = lastCandles.get(primaryEpic);
+      if (candles && candles.length > 20) {
+        const pngBuf = generateChartPng(null, candles);
+        chartFile = { buffer: pngBuf, name: 'chart.png', type: 'image/png' };
+        payload.embeds[0].image = { url: 'attachment://chart.png' };
+      }
+    }
+  } catch {}
+
+  try {
+    await discordSender.send(payload, chartFile);
+    logEvent('system', { type: 'heartbeat', balance, positions: symbols.reduce((a, s) => a + s.positions.length, 0), chart: !!chartFile });
   } catch (e) {
     logEvent('system', { type: 'heartbeat_err', msg: e.message });
   }

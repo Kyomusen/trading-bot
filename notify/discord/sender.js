@@ -4,16 +4,24 @@
 // นี่คือจุดที่แก้ปัญหาดีเลย์: ทุกอย่างต้องคำนวณเสร็จก่อนถึงไฟล์นี้
 
 const axios = require('axios');
+const FormData = require('form-data');
 const config = require('../../config');
 
-async function send(payload) {
+async function send(payload, file) {
   if (!config.notify.discord.enabled) return;
   if (!config.notify.discord.webhookUrl) {
     console.warn('[discord] ไม่มี webhookUrl ตั้งค่าไว้ ข้ามการส่ง');
     return;
   }
   try {
-    await axios.post(config.notify.discord.webhookUrl, payload);
+    if (file) {
+      const fd = new FormData();
+      fd.append('payload_json', JSON.stringify(payload));
+      fd.append('file', file.buffer, { filename: file.name, contentType: file.type });
+      await axios.post(config.notify.discord.webhookUrl, fd, { headers: fd.getHeaders() });
+    } else {
+      await axios.post(config.notify.discord.webhookUrl, payload);
+    }
   } catch (err) {
     console.error('[discord] ส่งแจ้งเตือนล้มเหลว:', err.message);
   }
