@@ -45,6 +45,7 @@ class PositionTracker {
       exitPrice: null,
       exitReason: null,
       pnl: null,
+      _openedAt: Date.now(),
     });
   }
 
@@ -88,7 +89,8 @@ class PositionTracker {
       }
 
       // ----- Hit SL? (เงื่อนไขเดียวกับ backtest: BUY low<=SL, SELL high>=SL) -----
-      const hit = isBuy ? checkTick <= pos.stopLevel : checkTick >= pos.stopLevel;
+      const age = Date.now() - (pos._openedAt || 0);
+      const hit = age > 5000 && (isBuy ? checkTick <= pos.stopLevel : checkTick >= pos.stopLevel);
 
       if (hit) {
         const dir = isBuy ? 1 : -1;

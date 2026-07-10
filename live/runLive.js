@@ -51,6 +51,16 @@ async function handleClose(epic, ev) {
     persistLossStreak();
   }
 
+  // close broker position when SL/TSL detected by shadow
+  if (ev.exitReason === 'STOP_LOSS' || ev.exitReason === 'TRAILING_STOP') {
+    try {
+      await broker.closePosition(ev.dealId);
+      logEvent(epic, { type: 'close_broker', dealId: ev.dealId });
+    } catch (e) {
+      logEvent(epic, { type: 'close_broker_err', dealId: ev.dealId, msg: e.message });
+    }
+  }
+
   const closeEv = closeTradeEvent(te, {
     closedAt: ev.timestamp || Date.now(),
     exitPrice: ev.exitPrice,
