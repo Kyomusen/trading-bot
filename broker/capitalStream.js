@@ -1,25 +1,11 @@
 // broker/capitalStream.js
-// คลาย wrapping ของ Capital.com streaming (Lightstreamer ผ่าน WebSocket)
-// ทำหน้าที่ดึงราคา realtime ของ symbol ที่สนใจ แล้ว emit 'price' events
-//   { epic, bid, ask, timestamp }
-// เพื่อป้อนเข้า engine/positionTracker (เงาที่จำลอง position แบบ realtime)
-//
-// NOTE: โปรโตคอล streaming ของ Capital.com เปลี่ยนแปลงได้ และ sandbox นี้ไม่มี network
-//       ไปทดสอบจริง จึงเขียนแบบ defensive + มี reconnect + มี REST fallback ใน runLive
-//       (ถ้า WS ต่อไม่ได้ จะตกกลับไป poll ราคาผ่าน REST ทุกๆ POLL_MS และป้อนให้ tracker เท่าเดิม)
-//
-// โปรโตคอลที่ใช้ (ตาม docs ของ Capital.com):
-//   1. POST /api/v1/session ( capitalClient.ensureSession ) → ได้ cst, x-security-token, accountId
-//   2. เชื่อม WS ไปที่ host streaming แล้วส่ง create_session
-//        { "action":"create_session", "arguments":{ "accountId","cst","securityToken" } }
-//   3. subscribe ราคา:
-//        { "action":"subscribe", "arguments":{ "destination":"marketData.quote.<EPIC>" }, "correlationId":"1" }
-//   4. รับข้อความราคา:
-//        { "destination":"marketData.quote.<EPIC>", "payload":{ "BID":..,"OFR":..,"UTM":.. } }
+// WebSocket connection to Capital.com CStream API
+// Connects → sends subscribe with cst/securityToken inline → receives price ticks
 
 const WebSocket = require('ws');
 const EventEmitter = require('events');
 const broker = require('./capitalClient');
+const { logEvent } = require('../live/liveLogger.js');
 
 class CapitalStream extends EventEmitter {
   constructor({ epic, brokerEpic }) {
@@ -34,18 +20,20 @@ class CapitalStream extends EventEmitter {
     this._maxRetryDelay = 120000;
     this._closedByUs = false;
     this._priceTimer = null;
+    this._pingTimer = null;
   }
 
   async connect() {
     try {
       await broker.ensureSession();
-      const host = broker.streamingHost;
+      const host = broker.streamingHost.replace(/\/+$/, '');
       if (!host) throw new Error('streamingHost not provided by session response');
-      this.host = host;
-      const url = `${host}/connect`;
+      this.host = host + '/';
+      const url = host + '/connect';
       this.ws = new WebSocket(url);
       this.ws.on('open', () => this._onOpen());
       this.ws.on('message', (data) => this._onMessage(data));
+      this.ws.on('ping', () => { this._lastPing = Date.now(); try { this.ws.pong(); } catch {} });
       this.ws.on('close', () => this._onClose());
       this.ws.on('error', (err) => {
         this.emit('error', err);
@@ -60,58 +48,64 @@ class CapitalStream extends EventEmitter {
   _onOpen() {
     this.ready = false;
     this.ws.send(JSON.stringify({
-      action: 'create_session',
-      arguments: {
-        accountId: broker.accountId,
-        cst: broker.cst,
-        securityToken: broker.securityToken,
-      },
+      destination: 'marketData.subscribe',
+      correlationId: '1',
+      cst: broker.cst,
+      securityToken: broker.securityToken,
+      payload: { epics: [this.brokerEpic] },
     }));
+    this._startPing();
+  }
+
+  _startPing() {
+    clearInterval(this._pingTimer);
+    this._pingTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({
+          destination: 'ping',
+          correlationId: '2',
+          cst: broker.cst,
+          securityToken: broker.securityToken,
+        }));
+      }
+    }, 300000);
   }
 
   _onMessage(data) {
     let msg;
     try { msg = JSON.parse(data.toString()); } catch { return; }
 
-    // ตอบรับ session / subscribe
-    if (msg.status === 'OK' || msg.action === 'cst_update') {
+    // subscription response
+    if (msg.destination === 'marketData.subscribe' && msg.status === 'OK') {
       if (!this.ready) {
         this.ready = true;
         this._retryCount = 0;
-        this.ws.send(JSON.stringify({
-          action: 'subscribe',
-          arguments: { destination: `marketData.quote.${this.brokerEpic}` },
-          correlationId: '1',
-        }));
+        logEvent(this.epic, { type: 'ws_ready' });
         this.emit('ready');
       }
       return;
     }
-    // create_session failed (e.g. rate-limited) — close so reconnect can retry
-    if (msg.action === 'create_session' && msg.status === 'ERROR') {
-      this.emit('error', new Error(`create_session failed: ${msg.errorCode || 'unknown'}`));
-      if (this.ws) this.ws.close();
-      return;
-    }
 
-    // ข้อความราคา
-    const dest = msg.destination || (msg.arguments && msg.arguments.destination);
-    if (dest === `marketData.quote.${this.brokerEpic}` && msg.payload) {
+    // price update
+    if (msg.destination === 'quote' && msg.status === 'OK' && msg.payload) {
       const p = msg.payload;
-      const bid = p.BID != null ? Number(p.BID) : undefined;
-      const ask = p.OFR != null ? Number(p.OFR) : undefined;
-      if (bid == null || ask == null) return;
+      if (p.bid == null || p.ofr == null) return;
+      const bid = Number(p.bid);
+      const ask = Number(p.ofr);
+      logEvent(this.epic, { type: 'ws_price', epic: p.epic, bid, ask });
       this.emit('price', {
-        epic: this.epic,
+        epic: p.epic || this.epic,
         bid,
         ask,
-        timestamp: p.UTM != null ? Number(p.UTM) : Date.now(),
+        timestamp: p.timestamp != null ? Number(p.timestamp) : Date.now(),
       });
+      return;
     }
   }
 
   _onClose() {
     this.ready = false;
+    clearInterval(this._pingTimer);
     this.emit('close');
     if (!this._closedByUs) this._scheduleReconnect();
   }
@@ -127,6 +121,7 @@ class CapitalStream extends EventEmitter {
   close() {
     this._closedByUs = true;
     clearTimeout(this._priceTimer);
+    clearInterval(this._pingTimer);
     if (this.ws) this.ws.close();
   }
 }

@@ -29,8 +29,9 @@ class CapitalClient {
     );
     this.cst = res.headers['cst'];
     this.securityToken = res.headers['x-security-token'];
-    this.accountId = res.data?.accountId ?? this.accountId ?? null;
+    this.accountId = res.data?.currentAccountId ?? this.accountId ?? null;
     this.streamingHost = res.data?.streamingHost ?? this.streamingHost ?? null;
+
     // session อยู่ได้ 10 นาที เผื่อ margin ไว้ 8 นาที
     this.sessionExpiresAt = Date.now() + 8 * 60 * 1000;
   }
