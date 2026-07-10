@@ -233,9 +233,6 @@ function generateChartPng(tradeEvent, candles) {
   const rgb = Buffer.alloc(WIDTH * HEIGHT * 3);
   fillRect(rgb, 0, 0, WIDTH, HEIGHT, BG);
 
-  const closes = (candles || []).map(c => parseFloat(c && c.close)).filter(v => isFinite(v));
-  if (closes.length < 2) return encodePNG(WIDTH, HEIGHT, rgb);
-
   // panel boundaries
   const mainBottom = MARGIN + MAIN_H;
   const rsiTop = mainBottom + 15;
@@ -248,11 +245,20 @@ function generateChartPng(tradeEvent, candles) {
   drawLine(rgb, 0, rsiBottom, WIDTH - 1, rsiBottom, DIVIDER);
   drawLine(rgb, 0, macdBottom, WIDTH - 1, macdBottom, DIVIDER);
 
-  // ---- MAIN PANEL: price + EMA ----
+  // ---- MAIN PANEL: candlestick + EMA ----
+  const ohlc = (candles || []).map(c => ({
+    o: parseFloat(c.open), h: parseFloat(c.high),
+    l: parseFloat(c.low),  c: parseFloat(c.close),
+  })).filter(v => isFinite(v.o) && isFinite(v.h) && isFinite(v.l) && isFinite(v.c));
+  if (ohlc.length < 2) return encodePNG(WIDTH, HEIGHT, rgb);
+
   let pMin = Infinity, pMax = -Infinity;
-  for (const v of closes) { if (v < pMin) pMin = v; if (v > pMax) pMax = v; }
-  const e20 = ema(closes, 20);
-  const e50 = ema(closes, 50);
+  for (const v of ohlc) {
+    if (v.h > pMax) pMax = v.h;
+    if (v.l < pMin) pMin = v.l;
+  }
+  const e20 = ema(ohlc.map(v => v.c), 20);
+  const e50 = ema(ohlc.map(v => v.c), 50);
   for (const arr of [e20, e50]) for (const v of arr) {
     if (v < pMin) pMin = v; if (v > pMax) pMax = v;
   }
@@ -261,22 +267,44 @@ function generateChartPng(tradeEvent, candles) {
   pMin -= pPad; pMax += pPad;
   const adjRange = pMax - pMin;
 
-  const toMainX = (i) => (closes.length <= 1 ? 0 : (i * (WIDTH - 1)) / (closes.length - 1));
+  const n = ohlc.length;
+  const candleW = Math.max(2, Math.floor((WIDTH - 1) / n / 1.3));
+  const gap = Math.max(0, Math.floor((WIDTH - 1) / n) - candleW);
   const toMainY = (v) => 0 + MAIN_H - ((v - pMin) / adjRange) * (MAIN_H - 1);
 
-  // price line
-  for (let i = 1; i < closes.length; i++) {
-    drawLine(rgb, toMainX(i - 1), toMainY(closes[i - 1]), toMainX(i), toMainY(closes[i]), COLOR.price);
+  for (let i = 0; i < n; i++) {
+    const cx = Math.round((i * (WIDTH - 1)) / (n - 1));
+    const x = cx - Math.floor(candleW / 2);
+    const bodyTop = toMainY(Math.max(ohlc[i].o, ohlc[i].c));
+    const bodyBot = toMainY(Math.min(ohlc[i].o, ohlc[i].c));
+    const wickTop = toMainY(ohlc[i].h);
+    const wickBot = toMainY(ohlc[i].l);
+    const isUp = ohlc[i].c >= ohlc[i].o;
+    const bodyColor = isUp ? [0, 200, 80] : [255, 60, 60];
+
+    // wick
+    drawLine(rgb, cx, wickTop, cx, bodyTop, [150, 150, 150]);
+    drawLine(rgb, cx, bodyBot, cx, wickBot, [150, 150, 150]);
+    // body
+    if (candleW >= 3) {
+      fillRect(rgb, x, bodyBot, candleW, Math.max(1, bodyBot - bodyTop + 1), bodyColor);
+    } else {
+      setPixel(rgb, cx, bodyBot, bodyColor);
+    }
   }
-  // EMA20
+
+  // EMA overlays
   for (let i = 1; i < e20.length; i++) {
     if (e20[i - 1] == null || e20[i] == null) continue;
-    drawLine(rgb, toMainX(i - 1), toMainY(e20[i - 1]), toMainX(i), toMainY(e20[i]), COLOR.ema20);
+    const x0 = (i - 1) * (WIDTH - 1) / (n - 1);
+    const x1 = i * (WIDTH - 1) / (n - 1);
+    drawLine(rgb, x0, toMainY(e20[i - 1]), x1, toMainY(e20[i]), COLOR.ema20);
   }
-  // EMA50
   for (let i = 1; i < e50.length; i++) {
     if (e50[i - 1] == null || e50[i] == null) continue;
-    drawLine(rgb, toMainX(i - 1), toMainY(e50[i - 1]), toMainX(i), toMainY(e50[i]), COLOR.ema50);
+    const x0 = (i - 1) * (WIDTH - 1) / (n - 1);
+    const x1 = i * (WIDTH - 1) / (n - 1);
+    drawLine(rgb, x0, toMainY(e50[i - 1]), x1, toMainY(e50[i]), COLOR.ema50);
   }
 
   // price labels
@@ -284,12 +312,12 @@ function generateChartPng(tradeEvent, candles) {
   drawText(rgb, 3, MAIN_H - 12, pMin.toFixed(1), COLOR.label);
 
   // ---- RSI SUB-PANEL ----
-  const rsiVals = calcRSI(closes, 14);
+  const rsiVals = calcRSI(ohlc.map(v => v.c), 14);
   drawOscillator(rgb, rsiVals, rsiTop, RSI_H, 50, 70, 30, COLOR.rsi, null, null, false);
   drawText(rgb, 5, rsiTop + 2, 'RSI(14)', COLOR.rsi);
 
   // ---- MACD SUB-PANEL ----
-  const macdData = calcMACD(closes, 12, 26, 9);
+  const macdData = calcMACD(ohlc.map(v => v.c), 12, 26, 9);
   const macdLen = macdData.histogram.length;
   const validMacd = macdData.histogram.filter(v => v != null);
   let macdMin = Math.min(...validMacd, ...macdData.macd.filter(v => v != null), ...macdData.signal.filter(v => v != null));
