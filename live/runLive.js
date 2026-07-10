@@ -159,7 +159,8 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
 
     const tracker = trackers.get(epic);
     if (tracker) tracker.openPosition({
-      dealId: order.dealReference, epic, direction: signal.direction,
+      dealId: order.dealReference, brokerDealId: confirm.dealId,
+      epic, direction: signal.direction,
       size: actualSiz, entryPrice: actualEntry, stopLevel: stopUsed,
     });
 
@@ -185,24 +186,36 @@ async function crossCheck(epic) {
   try { remote = await broker.getPositions(); } catch { return; }
   const { diffs, autoClosed } = tracker.crossCheck(remote);
 
-  // Fetch broker transaction history (วันนี้) for PnL verification
-  const today = new Date();
-  const yesterday = new Date(today.getTime() - 86400000);
+  // Fetch broker transaction history (1 วัน) for real PnL
   const fmt = (d) => d.toISOString().slice(0, 19);
+  const now = new Date();
+  const yesterday = new Date(now.getTime() - 86400000);
   let txns = [];
-  try { txns = await broker.getTransactionHistory(fmt(yesterday), fmt(today)); } catch {}
+  try { txns = await broker.getTransactionHistory(fmt(yesterday), fmt(now)); } catch {}
 
   for (const ev of autoClosed) {
-    // Find matching broker txn to get real PnL
-    const txn = txns.find((t) => t.dealId === ev.dealId || t.reference === ev.dealId);
-    const brokerPnl = txn ? txn.pnl : null;
+    // Match against broker txn history using brokerDealId (stored from confirmDeal)
+    const brokerDealId = ev.brokerDealId;
+    let brokerPnl = null;
+    if (brokerDealId) {
+      const matches = txns.filter((t) => t.dealId === brokerDealId);
+      if (matches.length) brokerPnl = matches.reduce((s, t) => s + (t.pnl || 0), 0);
+    }
+    // Fallback: confirmDeal if brokerDealId wasn't stored (e.g. old positions)
+    if (brokerPnl == null) {
+      const confirm = await broker.confirmDeal(ev.dealId);
+      if (confirm?.dealId) {
+        const matches = txns.filter((t) => t.dealId === confirm.dealId);
+        if (matches.length) brokerPnl = matches.reduce((s, t) => s + (t.pnl || 0), 0);
+      }
+    }
+
     logEvent(epic, {
       type: 'auto_close', dealId: ev.dealId, direction: ev.direction,
-      exitPrice: ev.exitPrice, pnl: ev.pnl, brokerPnl,
+      exitPrice: ev.exitPrice, shadowPnl: ev.pnl, brokerPnl, brokerDealId,
     });
-    if (brokerPnl != null && ev.pnl != null && Math.abs(brokerPnl - ev.pnl) > 0.01) {
-      logEvent(epic, { type: 'pnl_mismatch', dealId: ev.dealId, shadowPnl: ev.pnl, brokerPnl });
-    }
+
+    handleClose(epic, { ...ev, pnl: brokerPnl ?? ev.pnl });
   }
   if (diffs.length) {
     logEvent(epic, { type: 'cross_check_mismatch', diffs });
@@ -435,6 +448,30 @@ process.on('SIGTERM', () => { logEvent('system', { type: 'shutdown', signal: 'SI
 async function start() {
   _startTs = Date.now();
   logEvent('system', { type: 'start', msg: 'เริ่มบอทเทรดสด — WS=SL/TSL only, REST=signals' });
+
+  // Correct lossStreak from broker transaction history (reset wrong shadow PnL)
+  try {
+    const fmt = (d) => d.toISOString().slice(0, 19);
+    const now2 = new Date();
+    const from = new Date(now2.getTime() - 3 * 86400000);
+    const txns = await broker.getTransactionHistory(fmt(from), fmt(now2));
+    // Walk backward: find streaks of consecutive same-sign PnL
+    let streak = 0;
+    for (let i = txns.length - 1; i >= 0; i--) {
+      const pnl = txns[i].pnl;
+      if (pnl == null) continue;
+      if (pnl < 0) streak++;
+      else if (pnl > 0) { streak = 0; break; }
+    }
+    if (streak !== global.__lossStreak) {
+      logEvent('system', { type: 'loss_streak_corrected', from: global.__lossStreak, to: streak });
+      global.__lossStreak = streak;
+      persistState();
+    }
+  } catch (e) {
+    logEvent('system', { type: 'loss_streak_correction_err', msg: e.message });
+  }
+
   for (const sym of config.symbols) {
     if (!sym.enabled) continue;
     attachStream(sym);

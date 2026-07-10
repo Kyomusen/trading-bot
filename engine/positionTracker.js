@@ -32,9 +32,10 @@ class PositionTracker {
   setAtr(v) { this.atrNow = v; }
 
   // ลงทะเบียนโพซิชันที่เปิดผ่าน REST แล้ว (entry/stop ต้องคำนวณด้วยสูตรเดียวกับ backtest)
-  openPosition({ dealId, epic, direction, size, entryPrice, stopLevel }) {
+  openPosition({ dealId, brokerDealId, epic, direction, size, entryPrice, stopLevel }) {
     this.positions.set(dealId, {
       dealId,
+      brokerDealId,    // broker internal dealId (สำหรับ crossCheck match)
       epic,
       direction,
       size,
@@ -110,11 +111,18 @@ class PositionTracker {
   crossCheck(remotePositions) {
     const diffs = [];
     const autoClosed = [];
-    const remoteById = new Map((remotePositions || []).map((p) => [p.dealId, p]));
+    // Index by both dealId and brokerDealId
+    const remoteById = new Map();
+    for (const p of (remotePositions || [])) {
+      remoteById.set(p.dealId, p);
+      // some brokers also have a parent dealId or reference field
+    }
     const tolStop = this.pip * 0.5; // 0.5 pip
     for (const [dealId, pos] of this.positions) {
       if (pos.closed) continue;
-      const r = remoteById.get(dealId);
+      // Try brokerDealId first, then shadow dealId (dealReference)
+      let r = pos.brokerDealId ? remoteById.get(pos.brokerDealId) : null;
+      if (!r) r = remoteById.get(dealId);
       if (!r) {
         // broker ปิด position ไปแล้ว (SL/TSL ขณะ WS หลุด) — สร้าง close event ตาม stopLevel
         const dir = pos.direction === 'BUY' ? 1 : -1;
@@ -126,7 +134,6 @@ class PositionTracker {
           timestamp: Date.now(),
         };
         autoClosed.push(ev);
-        this.onClose(ev);
         diffs.push({ dealId, issue: 'SHADOW_AUTO_CLOSED' });
         continue;
       }
