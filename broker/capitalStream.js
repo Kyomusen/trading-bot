@@ -121,7 +121,7 @@ class CapitalStream extends EventEmitter {
     clearTimeout(this._priceTimer);
     this._retryCount++;
     const delay = Math.min(this.reconnectDelay * Math.pow(1.5, this._retryCount - 1), this._maxRetryDelay);
-    this._priceTimer = setTimeout(() => { this._retryCount = Math.max(0, this._retryCount - 1); this.connect(); }, delay);
+    this._priceTimer = setTimeout(() => { this.connect(); }, delay);
   }
 
   close() {
