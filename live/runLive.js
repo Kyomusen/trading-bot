@@ -7,17 +7,23 @@ const { evaluateAll } = require('../signals');
 const { calcPositionSize, resolveMaxLot } = require('../sizing');
 const { createTradeEvent, closeTradeEvent } = require('../engine/tradeEvent');
 const { PositionTracker } = require('../engine/positionTracker');
-const { CandleRecorder } = require('./candleRecorder');
+const { CandleRecorder, TF_MS } = require('./candleRecorder');
 const { atr } = require('../utils/indicators');
 const discordFormatter = require('../notify/discord/formatter');
 const discordSender = require('../notify/discord/sender');
-
+const { readState, writeState } = require('./state');
 
 const POLL_MS = 60 * 1000;
-const trackers = new Map();   // epic -> PositionTracker
-const recorders = new Map(); // epic -> CandleRecorder
-const openTradeMap = new Map(); // dealId -> tradeEvent
+const trackers = new Map();
+const recorders = new Map();
+const openTradeMap = new Map();
 const streams = [];
+const lastEvaluatedBar = new Map();
+
+global.__lossStreak = readState().lossStreak || 0;
+function persistLossStreak() {
+  writeState({ ...readState(), lossStreak: global.__lossStreak });
+}
 
 const TRADE_LOG_DIR = './data/live-trades';
 function logTrade(obj) {
@@ -27,8 +33,6 @@ function logTrade(obj) {
   } catch (e) { console.error('[live] logTrade err', e.message); }
 }
 
-// คำนวณ entry/stop ให้ตรงกับ backtest (เลื่อนตาม spread จริง: BUY +spread, SELL -spread)
-// คืน { entryUsed, stopUsed, slDist }
 function shiftForSpread(signal, liveSpread) {
   const entryUsed = signal.direction === 'BUY'
     ? signal.entry + liveSpread
@@ -39,16 +43,15 @@ function shiftForSpread(signal, liveSpread) {
   return { entryUsed, stopUsed, slDist: Math.abs(entryUsed - stopUsed) };
 }
 
-// ---------------- จัดการปิดออเดอร์ (ตรงกับ backtest: ปิดเมื่อ hit SL/TSL) ----------------
 async function handleClose(epic, ev) {
   const te = openTradeMap.get(ev.dealId);
   if (!te) return;
   let balance = null;
   try { balance = (await broker.getAccountBalance()).balance; } catch {}
-  // Track loss streak for dynamic risk reduction
   if (ev.pnl != null) {
     if (ev.pnl > 0) global.__lossStreak = 0;
     else if (ev.pnl < 0) global.__lossStreak = (global.__lossStreak || 0) + 1;
+    persistLossStreak();
   }
 
   const closeEv = closeTradeEvent(te, {
@@ -65,7 +68,6 @@ async function handleClose(epic, ev) {
   openTradeMap.delete(ev.dealId);
 }
 
-// ---------------- ป้อนราคา realtime เข้า tracker แล้ว sync กับบรoker ----------------
 function feedPrice(epic, price) {
   const tracker = trackers.get(epic);
   if (!tracker) return;
@@ -80,7 +82,6 @@ function feedPrice(epic, price) {
   for (const ev of closedEvents) handleClose(epic, ev);
 }
 
-// ---------------- เปิดออเดอร์ใหม่ (สูตรเดียวกับ backtest) ----------------
 async function maybeOpen(symbolConfig, candles, atrNow) {
   const { epic, brokerEpic } = symbolConfig;
   const apiEpic = brokerEpic || epic;
@@ -91,7 +92,6 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
   const liveSpreadPips = liveSpread / (sc.pipValue || 0.01);
   const configSpreadPips = sc.spreadPips || 20;
 
-  // guard แค่ช่วงสเปรดกว้าง (live-only safety; ไม่เปลี่ยนผลลัพธ์ของเทรดที่เปิด)
   if (liveSpreadPips > configSpreadPips * 1.25) {
     console.log(`[live] ${epic} spread ${liveSpreadPips.toFixed(0)}p > ${configSpreadPips * 1.25}p ข้าม`);
     return;
@@ -99,7 +99,6 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
 
   const { balance } = await broker.getAccountBalance();
 
-  // Loss streak dynamic risk (tracked in handleClose)
   let streakRiskMult = 1;
   if (global.__lossStreak >= 3) streakRiskMult = 0.5;
   else if (global.__lossStreak === 2) streakRiskMult = 0.75;
@@ -118,8 +117,7 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
     const { entryUsed, stopUsed, slDist } = shiftForSpread(signal, liveSpread);
     if (!slDist || slDist <= 0) continue;
 
-    // sizing ตรงกับ backtest: fixedRisk + monthly progressive risk reduction
-    const dynRisk = (symbolConfig.riskPercent ?? config.sizing?.fixedRisk?.riskPercent ?? 1) * monthRiskMult;
+    const dynRisk = (symbolConfig.riskPercent ?? config.sizing?.fixedRisk?.riskPercent ?? 1) * streakRiskMult;
     const size = Math.min(
       calcPositionSize({
         balance,
@@ -140,7 +138,6 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
       continue;
     }
 
-    // อ่านขนาดที่บรokerเติมจริง (อาจถูกคลัมป์ด้วย margin) เพื่อให้เงาตรงกับความเป็นจริง
     let actualSize = size;
     try {
       const live = (await broker.getPositions()) || [];
@@ -169,7 +166,6 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
   }
 }
 
-// ---------------- cross-check เงาเทียบ API จริง ----------------
 async function crossCheck(epic) {
   const tracker = trackers.get(epic);
   if (!tracker || tracker.positions.size === 0) return;
@@ -188,13 +184,21 @@ async function pollSymbol(symbolConfig) {
   const sc = config.symbols.find((s) => s.epic === epic) || {};
 
   const rawCandles = await broker.getCandles(apiEpic, 'HOUR', 100);
-  const candles = rawCandles.map((c) => ({
-    open: c.openPrice.bid, high: c.highPrice.bid, low: c.lowPrice.bid,
-    close: c.closePrice.bid, timestamp: c.snapshotTimeUTC,
-  }));
+  let candles = rawCandles
+    .map((c) => ({
+      open: c.openPrice.bid, high: c.highPrice.bid, low: c.lowPrice.bid,
+      close: c.closePrice.bid, timestamp: Date.parse(c.snapshotTimeUTC),
+    }))
+    .filter((c) => !isNaN(c.timestamp));
   if (!candles.length) return;
 
-  // Task 3: reconcile แท่งที่ aggregate จาก WS กับ REST (กันข้อมูลขาดหายตอน WS หลุด)
+  const barMs = TF_MS[symbolConfig.timeframe || 'HOUR'] || TF_MS.HOUR;
+  const lastRaw = candles[candles.length - 1];
+  if (lastRaw && (Date.now() - lastRaw.timestamp) < barMs) {
+    candles = candles.slice(0, -1);
+  }
+  if (!candles.length) return;
+
   const rec = recorders.get(epic);
   if (rec) {
     const rest = rawCandles
@@ -213,13 +217,17 @@ async function pollSymbol(symbolConfig) {
   const tracker = trackers.get(epic);
   if (tracker) tracker.setAtr(atrNow);
 
-  // fallback: ถ้า WS ไม่มา ให้ป้อนราคาล่าสุดเข้า tracker ทุกๆ รอบ poll (trailing ทำงานที่ 60s granularity)
   if (tracker && (!streams.length || streams.every((s) => !s.ready))) {
     const md = await broker.getMarketDetails(apiEpic);
     if (md.bid != null && md.offer != null) feedPrice(epic, { bid: md.bid, ask: md.offer, timestamp: Date.now() });
   }
 
-  if (atrNow) await maybeOpen(symbolConfig, candles, atrNow);
+  const lastBarTs = candles[candles.length - 1].timestamp;
+  const isNewClosedBar = lastEvaluatedBar.get(epic) !== lastBarTs;
+  if (atrNow && isNewClosedBar) {
+    await maybeOpen(symbolConfig, candles, atrNow);
+    lastEvaluatedBar.set(epic, lastBarTs);
+  }
   await crossCheck(epic);
 }
 
@@ -261,14 +269,12 @@ function attachStream(symbolConfig) {
   stream.on('error', (e) => console.error(`[live] stream ${epic} err:`, e.message));
   stream.on('close', () => {
     console.log(`[live] stream ${epic} closed (fallback ไป REST poll + reconcile)`);
-    // ทันทีที่ WS หลุด: ดึง REST มา reconcile ช่องว่าง
     pollSymbol(symbolConfig).catch((e) => console.error(`[live] reconcile-on-close ${epic} err`, e.message));
   });
   stream.connect();
   streams.push(stream);
 }
 
-// เขียนแท่งที่ค้างอยู่ก่อนปิดโปรแกรม (ไม่ให้เสียข้อมูล)
 function flushAll() {
   for (const rec of recorders.values()) rec.flush();
 }
