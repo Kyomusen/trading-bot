@@ -51,16 +51,6 @@ async function handleClose(epic, ev) {
     persistLossStreak();
   }
 
-  // close broker position when SL/TSL detected by shadow
-  if (ev.exitReason === 'STOP_LOSS' || ev.exitReason === 'TRAILING_STOP') {
-    try {
-      await broker.closePosition(ev.dealId);
-      logEvent(epic, { type: 'close_broker', dealId: ev.dealId });
-    } catch (e) {
-      logEvent(epic, { type: 'close_broker_err', dealId: ev.dealId, msg: e.message });
-    }
-  }
-
   const closeEv = closeTradeEvent(te, {
     closedAt: ev.timestamp || Date.now(),
     exitPrice: ev.exitPrice,
@@ -78,13 +68,12 @@ async function handleClose(epic, ev) {
 function feedPrice(epic, price) {
   const tracker = trackers.get(epic);
   if (!tracker) return;
-  const { stopUpdates, closedEvents } = tracker.onPrice({ epic, bid: price.bid, ask: price.ask, timestamp: price.timestamp });
+  const { stopUpdates } = tracker.onPrice({ epic, bid: price.bid, ask: price.ask, timestamp: price.timestamp });
   for (const u of stopUpdates) {
     broker.updatePosition(u.dealId, { stopLevel: u.stopLevel })
       .then(() => logEvent(epic, { type: 'trail_update', dealId: u.dealId, stopLevel: u.stopLevel }))
       .catch((e) => logEvent(epic, { type: 'trail_err', dealId: u.dealId, msg: e.message }));
   }
-  for (const ev of closedEvents) handleClose(epic, ev);
 }
 
 async function maybeOpen(symbolConfig, candles, atrNow) {
@@ -177,7 +166,7 @@ async function crossCheck(epic) {
   let remote;
   try { remote = await broker.getPositions(); } catch { return; }
   const { diffs, autoClosed } = tracker.crossCheck(remote);
-  // autoClosed ถูก process โดย onClose callback ใน PositionTracker แล้ว (→ handleClose)
+  // autoClosed = broker ปิด position (SL/TSL จริง) → clean up shadow + notify
   for (const ev of autoClosed) {
     logEvent(epic, { type: 'auto_close', dealId: ev.dealId, direction: ev.direction, exitPrice: ev.exitPrice, pnl: ev.pnl });
   }

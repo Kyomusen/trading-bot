@@ -45,7 +45,6 @@ class PositionTracker {
       exitPrice: null,
       exitReason: null,
       pnl: null,
-      _openedAt: Date.now(),
     });
   }
 
@@ -55,11 +54,12 @@ class PositionTracker {
 
   // ป้อนราคา realtime ทีละ tick
   // price: { epic, bid, ask, timestamp, high?, low? }
-  //   - high/low: extreme ของช่วงนั้น (backtest replay ส่ง candle.high/low) → ใช้คำนวณ best + เช็ค hit
-  //   - หากไม่ส่ง high/low จะ derive จาก bid/ask (โหมด live WebSocket ที่ได้แค่ราคาล่าสุด)
-  // คืน { closedEvents:[...], stopUpdates:[{dealId, stopLevel}] }
+  // broker ปิด position เองเมื่อ SL/TSL ถึง — บอทไม่ต้องตรวจจับการ hit SL
+  // บอทมีหน้าที่:
+  //   1. คำนวณ trailing stop ว่า SL ควรขยับไปเท่าใด (ถ้ามีการเปลี่ยนแปลง → ส่งไป update ที่ broker)
+  //   2. advance bestPrice สำหรับรอบถัดไป
+  // คืน { stopUpdates:[{dealId, stopLevel}] }
   onPrice({ epic, bid, ask, timestamp, high, low }) {
-    const closedEvents = [];
     const stopUpdates = [];
     const tickHigh = high != null ? high : (ask ?? bid);
     const tickLow = low != null ? low : (bid ?? ask);
@@ -70,12 +70,8 @@ class PositionTracker {
       if (pos.epic && epic && pos.epic !== epic) continue;
 
       const isBuy = pos.direction === 'BUY';
-      // advance best ด้วยฝั่งที่เป็นกำไร (high สำหรับ BUY, low สำหรับ SELL)
       const bestTick = isBuy ? tickHigh : tickLow;
-      // เช็ค hit ด้วยฝั่งที่เป็นโทษ (low สำหรับ BUY, high สำหรับ SELL)
-      const checkTick = isBuy ? tickLow : tickHigh;
 
-      // ----- Trailing stop (logic เดียวกับ backtest) -----
       let newStop = pos.stopLevel;
       if (this.atrNow) {
         const trailPos = {
@@ -88,25 +84,12 @@ class PositionTracker {
         pos.bestPrice = trailPos.bestPrice;
       }
 
-      // ----- Hit SL? (เงื่อนไขเดียวกับ backtest: BUY low<=SL, SELL high>=SL) -----
-      const age = Date.now() - (pos._openedAt || 0);
-      const hit = age > 5000 && (isBuy ? checkTick <= pos.stopLevel : checkTick >= pos.stopLevel);
-
-      if (hit) {
-        const dir = isBuy ? 1 : -1;
-        pos.closed = true;
-        pos.exitPrice = pos.stopLevel;
-        pos.pnl = (pos.stopLevel - pos.entryPrice) * dir * pos.size;
-        pos.exitReason = 'STOP_LOSS';
-        const ev = { ...pos, timestamp };
-        closedEvents.push(ev);
-        this.onClose(ev);
-      } else if (newStop !== pos.stopLevel) {
+      if (newStop !== pos.stopLevel) {
         pos.stopLevel = newStop;
         stopUpdates.push({ dealId, stopLevel: newStop });
       }
     }
-    return { closedEvents, stopUpdates };
+    return { stopUpdates };
   }
 
   // PnL ปัจจุบัน (mark-to-market) สำหรับรายงาน — ไม่ใช้ settle
