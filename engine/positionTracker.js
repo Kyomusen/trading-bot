@@ -121,15 +121,28 @@ class PositionTracker {
 
   // เทียบเงากับโพซิชันที่ดึงจาก API จริง
   // remotePositions: array จาก broker.getPositions() → { dealId, stopLevel, pnl, size, direction }
-  // คืน array ของความคลาดเคลื่อน
+  // คืน { diffs, autoClosed } — autoClosed คือ position ที่ shadow มีแต่ broker ปิดไปแล้ว (โดน SL/TSL ตอน WS หลุด)
   crossCheck(remotePositions) {
     const diffs = [];
+    const autoClosed = [];
     const remoteById = new Map((remotePositions || []).map((p) => [p.dealId, p]));
     const tolStop = this.pip * 0.5; // 0.5 pip
     for (const [dealId, pos] of this.positions) {
+      if (pos.closed) continue;
       const r = remoteById.get(dealId);
       if (!r) {
-        diffs.push({ dealId, issue: 'SHADOW_NOT_IN_BROKER' });
+        // broker ปิด position ไปแล้ว (SL/TSL ขณะ WS หลุด) — สร้าง close event ตาม stopLevel
+        const dir = pos.direction === 'BUY' ? 1 : -1;
+        const ev = {
+          ...pos,
+          exitPrice: pos.stopLevel,
+          exitReason: 'STOP_LOSS',
+          pnl: (pos.stopLevel - pos.entryPrice) * dir * pos.size,
+          timestamp: Date.now(),
+        };
+        autoClosed.push(ev);
+        this.onClose(ev);
+        diffs.push({ dealId, issue: 'SHADOW_AUTO_CLOSED' });
         continue;
       }
       if (Math.abs((r.stopLevel ?? 0) - pos.stopLevel) > tolStop) {
@@ -144,7 +157,7 @@ class PositionTracker {
         diffs.push({ dealId, issue: 'SIZE_MISMATCH', shadow: pos.size, broker: r.size });
       }
     }
-    return diffs;
+    return { diffs, autoClosed };
   }
 }
 

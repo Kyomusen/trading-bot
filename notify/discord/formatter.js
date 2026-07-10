@@ -26,11 +26,17 @@ function formatOpenEvent(tradeEvent) {
 
 function formatCloseEvent(tradeEvent) {
   const isProfit = (tradeEvent.pnl ?? 0) >= 0;
-  const color = isProfit ? 0x2ecc71 : 0xe74c3c;
+  const isStopHit = tradeEvent.exitReason === 'STOP_LOSS' || tradeEvent.exitReason === 'TRAILING_STOP' || tradeEvent.exitReason?.startsWith('STOP');
+  let color = isProfit ? 0x2ecc71 : 0xe74c3c;
+  let prefix = '';
+  if (isStopHit) {
+    color = isProfit ? 0x2ecc71 : 0xff4444;
+    prefix = '🛑 ';
+  }
   return {
     embeds: [
       {
-        title: `ปิดออเดอร์ ${tradeEvent.direction} — ${tradeEvent.epic}`,
+        title: `${prefix}ปิดออเดอร์ ${tradeEvent.direction} — ${tradeEvent.epic}`,
         color,
         description: [
           `**กลยุทธ์:** ${tradeEvent.strategy}`,

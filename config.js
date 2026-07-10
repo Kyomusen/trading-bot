@@ -27,7 +27,6 @@ module.exports = {
       riskPercent: 1,
       offset: 0,
       trendMode: 'OR',
-      tradingHours: null,  // null = 24/7
       spreadMultiplier: 1.0,  // เทียบกับ Capital.com: spread จริง × factor (1.0 = raw Dukascopy)
       trailing: true,
       trailingActivate: 0.1,

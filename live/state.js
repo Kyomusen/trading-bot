@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const STATE_FILE = path.join(__dirname, '..', 'data', 'live_state.json');
+const { logEvent } = require('./liveLogger');
 
 function readState() {
   try {
@@ -12,7 +13,7 @@ function writeState(s) {
   try {
     fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
     fs.writeFileSync(STATE_FILE, JSON.stringify(s, null, 2));
-  } catch (e) { console.error('[state] write err', e.message); }
+  } catch (e) { logEvent('system', { type: 'state_write_err', msg: e.message }); }
 }
 
 module.exports = { readState, writeState };

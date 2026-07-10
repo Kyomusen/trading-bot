@@ -4,18 +4,19 @@ const broker = require('../broker/capitalClient');
 const { CapitalStream } = require('../broker/capitalStream');
 const config = require('../config');
 const { evaluateAll } = require('../signals');
+const xauStrategy = require('../signals/xauStrategy');
 const { calcPositionSize, resolveMaxLot } = require('../sizing');
 const { createTradeEvent, closeTradeEvent } = require('../engine/tradeEvent');
 const { PositionTracker } = require('../engine/positionTracker');
-const { CandleRecorder, TF_MS } = require('./candleRecorder');
+const { TF_MS } = require('./candleRecorder');
 const { atr } = require('../utils/indicators');
 const discordFormatter = require('../notify/discord/formatter');
 const discordSender = require('../notify/discord/sender');
 const { readState, writeState } = require('./state');
+const { logEvent, logCandle, logSignal, logTrade } = require('./liveLogger');
 
-const POLL_MS = 60 * 1000;
+const POLL_MS = 5 * 60 * 1000; // REST poll ทุก 5m — แค่พอ detect ว่าแท่ง H1 ปิดใหม่แล้ว
 const trackers = new Map();
-const recorders = new Map();
 const openTradeMap = new Map();
 const streams = [];
 const lastEvaluatedBar = new Map();
@@ -23,14 +24,6 @@ const lastEvaluatedBar = new Map();
 global.__lossStreak = readState().lossStreak || 0;
 function persistLossStreak() {
   writeState({ ...readState(), lossStreak: global.__lossStreak });
-}
-
-const TRADE_LOG_DIR = './data/live-trades';
-function logTrade(obj) {
-  try {
-    fs.mkdirSync(TRADE_LOG_DIR, { recursive: true });
-    fs.appendFileSync(path.join(TRADE_LOG_DIR, `${obj.epic}.jsonl`), JSON.stringify(obj) + '\n');
-  } catch (e) { console.error('[live] logTrade err', e.message); }
 }
 
 function shiftForSpread(signal, liveSpread) {
@@ -60,9 +53,9 @@ async function handleClose(epic, ev) {
     exitReason: ev.exitReason,
     balance,
   });
-  console.log(`[live] CLOSE ${ev.dealId} ${ev.direction} exit=${ev.exitPrice} pnl=${ev.pnl != null ? ev.pnl.toFixed(2) : '?'} reason=${ev.exitReason}`);
-  logTrade({ type: 'CLOSE', epic, dealId: ev.dealId, exitPrice: ev.exitPrice, exitReason: ev.exitReason, pnl: ev.pnl, closedAt: ev.timestamp || Date.now() });
-  try { await discordSender.send(discordFormatter.formatCloseEvent(closeEv)); } catch (e) { console.error('[live] discord close err', e.message); }
+  logEvent(epic, { type: 'close', dealId: ev.dealId, direction: ev.direction, exitPrice: ev.exitPrice, pnl: ev.pnl, reason: ev.exitReason });
+  logTrade(epic, { type: 'CLOSE', epic, dealId: ev.dealId, direction: ev.direction, exitPrice: ev.exitPrice, exitReason: ev.exitReason, pnl: ev.pnl, closedAt: ev.timestamp || Date.now(), strategy: te.strategy });
+  try { await discordSender.send(discordFormatter.formatCloseEvent(closeEv)); } catch (e) { logEvent(epic, { type: 'discord_err', context: 'close', msg: e.message }); }
   const tracker = trackers.get(epic);
   if (tracker) tracker.removePosition(ev.dealId);
   openTradeMap.delete(ev.dealId);
@@ -71,13 +64,11 @@ async function handleClose(epic, ev) {
 function feedPrice(epic, price) {
   const tracker = trackers.get(epic);
   if (!tracker) return;
-  const rec = recorders.get(epic);
-  if (rec) rec.addTick({ epic, bid: price.bid, ask: price.ask, timestamp: price.timestamp || Date.now() });
   const { stopUpdates, closedEvents } = tracker.onPrice({ epic, bid: price.bid, ask: price.ask, timestamp: price.timestamp });
   for (const u of stopUpdates) {
     broker.updatePosition(u.dealId, { stopLevel: u.stopLevel })
-      .then(() => console.log(`[live] trail ${u.dealId} → ${u.stopLevel.toFixed(2)}`))
-      .catch((e) => console.error(`[live] updatePosition ${u.dealId} err`, e.message));
+      .then(() => logEvent(epic, { type: 'trail_update', dealId: u.dealId, stopLevel: u.stopLevel }))
+      .catch((e) => logEvent(epic, { type: 'trail_err', dealId: u.dealId, msg: e.message }));
   }
   for (const ev of closedEvents) handleClose(epic, ev);
 }
@@ -93,7 +84,7 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
   const configSpreadPips = sc.spreadPips || 20;
 
   if (liveSpreadPips > configSpreadPips * 1.25) {
-    console.log(`[live] ${epic} spread ${liveSpreadPips.toFixed(0)}p > ${configSpreadPips * 1.25}p ข้าม`);
+    logEvent(epic, { type: 'skip_spread', spread: liveSpreadPips, limit: configSpreadPips * 1.25 });
     return;
   }
 
@@ -105,7 +96,7 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
 
   const positions = (await broker.getPositions()) || [];
   if (positions.length >= (config.risk?.maxConcurrentTrades || 1)) {
-    console.log(`[live] ${epic} มี ${positions.length} position แล้ว ข้าม`);
+    logEvent(epic, { type: 'skip_positions_full', count: positions.length, max: config.risk?.maxConcurrentTrades || 1 });
     return;
   }
 
@@ -134,7 +125,7 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
       epic: apiEpic, direction: signal.direction, size, stopLevel: stopUsed,
     });
     if (!order || !order.dealReference) {
-      console.log(`[live] ${epic} เปิดไม่สำเร็จ (margin?) ข้าม`);
+      logEvent(epic, { type: 'skip_order_failed', reason: 'margin or reject', direction: signal.direction, size });
       continue;
     }
 
@@ -160,9 +151,9 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
       openedAt: Date.now(),
     });
     openTradeMap.set(order.dealReference, tradeEvent);
-    console.log(`[live] OPEN ${order.dealReference} ${signal.direction} size=${actualSize} @${entryUsed.toFixed(2)} SL=${stopUsed.toFixed(2)}`);
-    logTrade({ type: 'OPEN', epic, dealId: order.dealReference, direction: signal.direction, entry: signal.entry, stopLoss: signal.stopLoss, size: actualSize, openedAt: Date.now() });
-    try { await discordSender.send(discordFormatter.formatOpenEvent(tradeEvent)); } catch (e) { console.error('[live] discord open err', e.message); }
+    logEvent(epic, { type: 'open', dealId: order.dealReference, direction: signal.direction, entry: entryUsed, stop: stopUsed, size: actualSize });
+    logTrade(epic, { type: 'OPEN', epic, dealId: order.dealReference, direction: signal.direction, entry: signal.entry, stopLoss: signal.stopLoss, size: actualSize, openedAt: Date.now(), strategy: signal.strategy, indicators: signal.indicators });
+    try { await discordSender.send(discordFormatter.formatOpenEvent(tradeEvent)); } catch (e) { logEvent(epic, { type: 'discord_err', context: 'open', msg: e.message }); }
   }
 }
 
@@ -171,10 +162,13 @@ async function crossCheck(epic) {
   if (!tracker || tracker.positions.size === 0) return;
   let remote;
   try { remote = await broker.getPositions(); } catch { return; }
-  const diffs = tracker.crossCheck(remote);
+  const { diffs, autoClosed } = tracker.crossCheck(remote);
+  // autoClosed ถูก process โดย onClose callback ใน PositionTracker แล้ว (→ handleClose)
+  for (const ev of autoClosed) {
+    logEvent(epic, { type: 'auto_close', dealId: ev.dealId, direction: ev.direction, exitPrice: ev.exitPrice, pnl: ev.pnl });
+  }
   if (diffs.length) {
-    console.log(`[live] CROSS-CHECK ${epic} พบความคลาดเคลื่อน:`);
-    for (const d of diffs) console.log('   ', JSON.stringify(d));
+    logEvent(epic, { type: 'cross_check_mismatch', diffs });
   }
 }
 
@@ -199,17 +193,28 @@ async function pollSymbol(symbolConfig) {
   }
   if (!candles.length) return;
 
-  const rec = recorders.get(epic);
-  if (rec) {
-    const rest = rawCandles
-      .map((c) => ({
-        timestamp: Date.parse(c.snapshotTimeUTC),
-        open: c.openPrice.bid, high: c.highPrice.bid, low: c.lowPrice.bid, close: c.closePrice.bid,
-      }))
-      .filter((c) => !isNaN(c.timestamp));
-    const { added, warned } = rec.reconcile(rest, { tolerance: (sc.pipValue || 0.01) * 2 });
-    if (added.length) console.log(`[live] reconcile ${epic}: เติม ${added.length} แท่งจาก REST (WS หลุด)`);
-    for (const w of warned) console.log(`[live] reconcile WARN ${epic} ts=${w.timestamp} wsClose=${w.wsClose} restClose=${w.restClose} diff=${w.diff}`);
+  // Save every REST candle to live-recorded before processing
+  const existingLines = new Set();
+  try {
+    const rp = path.join('./data/live-recorded', `${epic}.jsonl`);
+    if (fs.existsSync(rp)) {
+      const lines = fs.readFileSync(rp, 'utf-8').split('\n').filter(Boolean);
+      for (const ln of lines) {
+        try { existingLines.add(JSON.parse(ln).timestamp); } catch {}
+      }
+    }
+  } catch {}
+  const restCandles = rawCandles
+    .map((c) => ({
+      timestamp: Date.parse(c.snapshotTimeUTC),
+      open: c.openPrice.bid, high: c.highPrice.bid, low: c.lowPrice.bid, close: c.closePrice.bid,
+    }))
+    .filter((c) => !isNaN(c.timestamp));
+  for (const rc of restCandles) {
+    if (!existingLines.has(rc.timestamp)) {
+      logCandle(epic, { ...rc, source: 'rest' });
+      existingLines.add(rc.timestamp);
+    }
   }
 
   const atrValues = atr(candles, 14);
@@ -225,6 +230,13 @@ async function pollSymbol(symbolConfig) {
   const lastBarTs = candles[candles.length - 1].timestamp;
   const isNewClosedBar = lastEvaluatedBar.get(epic) !== lastBarTs;
   if (atrNow && isNewClosedBar) {
+    // Log full signal evaluation before maybeOpen
+    const debugSignal = xauStrategy.evaluateDebug(candles, epic);
+    logSignal(epic, {
+      candleTimestamp: lastBarTs,
+      debug: debugSignal,
+      evaluatedAt: Date.now(),
+    });
     await maybeOpen(symbolConfig, candles, atrNow);
     lastEvaluatedBar.set(epic, lastBarTs);
   }
@@ -239,15 +251,17 @@ async function reportPositions() {
     if (!tracker || tracker.positions.size === 0) continue;
     const md = await broker.getMarketDetails(sym.brokerEpic || sym.epic).catch(() => null);
     const mtm = tracker.markToMarket(md || { bid: null, ask: null });
-    for (const p of mtm) console.log(`[live] pos ${sym.epic} ${p.dealId} stop=${p.stopLevel?.toFixed(2)} uPnL=${p.unrealizedPnl?.toFixed(2)}`);
+    for (const p of mtm) {
+      logEvent(sym.epic, { type: 'position_report', dealId: p.dealId, stopLevel: p.stopLevel?.toFixed(2), uPnL: p.unrealizedPnl?.toFixed(2) });
+    }
   }
-  console.log(`[live] balance=${bal}`);
+  logEvent('system', { type: 'balance_report', balance: bal });
 }
 
 async function tickAllSymbols() {
   for (const sym of config.symbols) {
     if (!sym.enabled) continue;
-    try { await pollSymbol(sym); } catch (err) { console.error(`[live] ${sym.epic}:`, err.message); }
+    try { await pollSymbol(sym); } catch (err) { logEvent(sym.epic, { type: 'poll_err', msg: err.message }); }
   }
   try { await reportPositions(); } catch {}
 }
@@ -261,28 +275,27 @@ function attachStream(symbolConfig) {
   });
   trackers.set(epic, tracker);
 
-  const recorder = new CandleRecorder({ epic, timeframe: symbolConfig.timeframe || 'HOUR' });
-  recorders.set(epic, recorder);
+  // CandleRecorder remains instantiated (for reconcile if needed)
+  // but feedPrice no longer calls rec.addTick — WS is SL/TSL only
 
   const stream = new CapitalStream({ epic, brokerEpic: apiEpic });
   stream.on('price', (price) => feedPrice(epic, price));
-  stream.on('error', (e) => console.error(`[live] stream ${epic} err:`, e.message));
+  stream.on('error', (e) => logEvent(epic, { type: 'ws_error', msg: e.message }));
   stream.on('close', () => {
-    console.log(`[live] stream ${epic} closed (fallback ไป REST poll + reconcile)`);
-    pollSymbol(symbolConfig).catch((e) => console.error(`[live] reconcile-on-close ${epic} err`, e.message));
+    logEvent(epic, { type: 'ws_closed' });
   });
   stream.connect();
   streams.push(stream);
 }
 
 function flushAll() {
-  for (const rec of recorders.values()) rec.flush();
+  // no WS candle recording to flush — WS is SL/TSL only
 }
-process.on('SIGINT', () => { flushAll(); process.exit(0); });
-process.on('SIGTERM', () => { flushAll(); process.exit(0); });
+process.on('SIGINT', () => { logEvent('system', { type: 'shutdown', signal: 'SIGINT' }); process.exit(0); });
+process.on('SIGTERM', () => { logEvent('system', { type: 'shutdown', signal: 'SIGTERM' }); process.exit(0); });
 
 async function start() {
-  console.log('[live] เริ่มบอทเทรดสด (Capital.com demo) — เชื่อม WebSocket + shadow position tracker');
+  logEvent('system', { type: 'start', msg: 'เริ่มบอทเทรดสด — WS=SL/TSL only, REST=signals' });
   for (const sym of config.symbols) {
     if (!sym.enabled) continue;
     attachStream(sym);

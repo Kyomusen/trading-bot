@@ -29,7 +29,9 @@ class CapitalStream extends EventEmitter {
     this.host = broker.streamingHost || null;
     this.ws = null;
     this.ready = false;
-    this.reconnectDelay = 2000;
+    this.reconnectDelay = 10000;
+    this._retryCount = 0;
+    this._maxRetryDelay = 120000;
     this._closedByUs = false;
     this._priceTimer = null;
   }
@@ -75,6 +77,7 @@ class CapitalStream extends EventEmitter {
     if (msg.status === 'OK' || msg.action === 'cst_update') {
       if (!this.ready) {
         this.ready = true;
+        this._retryCount = 0;
         this.ws.send(JSON.stringify({
           action: 'subscribe',
           arguments: { destination: `marketData.quote.${this.brokerEpic}` },
@@ -82,6 +85,12 @@ class CapitalStream extends EventEmitter {
         }));
         this.emit('ready');
       }
+      return;
+    }
+    // create_session failed (e.g. rate-limited) — close so reconnect can retry
+    if (msg.action === 'create_session' && msg.status === 'ERROR') {
+      this.emit('error', new Error(`create_session failed: ${msg.errorCode || 'unknown'}`));
+      if (this.ws) this.ws.close();
       return;
     }
 
@@ -110,7 +119,9 @@ class CapitalStream extends EventEmitter {
   _scheduleReconnect() {
     if (this._closedByUs) return;
     clearTimeout(this._priceTimer);
-    this._priceTimer = setTimeout(() => this.connect(), this.reconnectDelay);
+    this._retryCount++;
+    const delay = Math.min(this.reconnectDelay * Math.pow(1.5, this._retryCount - 1), this._maxRetryDelay);
+    this._priceTimer = setTimeout(() => { this._retryCount = Math.max(0, this._retryCount - 1); this.connect(); }, delay);
   }
 
   close() {

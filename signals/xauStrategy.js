@@ -94,10 +94,15 @@ function evaluate(candles, epic) {
   return _evaluate(candles, null, null, epic);
 }
 
-function _evaluate(candles, pc, idx, epic) {
+function evaluateDebug(candles, epic) {
+  return _evaluate(candles, null, null, epic, true);
+}
+
+function _evaluate(candles, pc, idx, epic, _debug) {
   const sc = config.symbols.find(s => s.epic === epic) || {};
   if (!sc || !sc.enabled) return null;
 
+  const candleTs = idx != null ? candles[idx]?.timestamp : (candles.length > 0 ? candles[candles.length - 1]?.timestamp : null);
   // session filter สำหรับ generate signal เท่านั้น
   // รองรับ: null (24/7) | {utcStart,utcEnd} (หน้าต่างเดียว) |
   //        {windows:[[s,e],...]} (หลายหน้าต่างอนุญาต) | {exclude:[[s,e],...]} (บล็อกหน้าต่าง)
@@ -107,17 +112,17 @@ function _evaluate(candles, pc, idx, epic) {
     const h = new Date(cur.timestamp).getUTCHours();
     if (session.windows) {
       const ok = session.windows.some(([s, e]) => (e <= s ? (h >= s || h < e) : (h >= s && h < e)));
-      if (!ok) return null;
+      if (!ok) { if (_debug) return { signal: null, reason: 'outside_trading_hours', candleTimestamp: candleTs }; return null; }
     } else if (session.exclude) {
       const blocked = session.exclude.some(([s, e]) => (e <= s ? (h >= s || h < e) : (h >= s && h < e)));
-      if (blocked) return null;
+      if (blocked) { if (_debug) return { signal: null, reason: 'excluded_hours', candleTimestamp: candleTs }; return null; }
     } else if (session.utcStart != null) {
-      if (h < session.utcStart || h >= session.utcEnd) return null;
+      if (h < session.utcStart || h >= session.utcEnd) { if (_debug) return { signal: null, reason: 'outside_utc_window', candleTimestamp: candleTs }; return null; }
     }
   }
 
   const ind = pc ? pc[idx] : calcInd(candles);
-  if (!ind || ind.rsi == null || !ind.atr) return null;
+  if (!ind || ind.rsi == null || !ind.atr) { if (_debug) return { signal: null, reason: 'insufficient_indicators', indicators: ind || null, candleTimestamp: candleTs }; return null; }
 
   const { rsi, atr, currentPrice, ema9, ema20, ema50, emaTrend, macd, nearSupport, nearResistance, adx, diPlus, diMinus, donchianHigh20, donchianLow20, keltnerUpper, keltnerLower } = ind;
 
@@ -230,7 +235,10 @@ function _evaluate(candles, pc, idx, epic) {
     return true;
   });
 
-  if (filtered.length === 0) return null;
+  if (filtered.length === 0) {
+    if (_debug) return { signal: null, reason: 'all_filtered_out', candidates, filtered: [], indicators: ind, candleTimestamp: candleTs };
+    return null;
+  }
   filtered.sort((a, b) => b.confidence - a.confidence);
   const d = filtered[0];
 
@@ -242,7 +250,7 @@ function _evaluate(candles, pc, idx, epic) {
     ? entryPrice - d.slPips * pipToPrice(1)
     : entryPrice + d.slPips * pipToPrice(1);
 
-  return {
+  const signal = {
     strategy: 'xauTrend',
     direction: d.action,
     entry: parseFloat(entryPrice.toFixed(5)),
@@ -255,6 +263,8 @@ function _evaluate(candles, pc, idx, epic) {
       setup: d.setup, slPips: d.slPips,
     },
   };
+  if (_debug) return { signal, candidates, filtered, indicators: ind, candleTimestamp: candleTs };
+  return signal;
 }
 
 // EMA แบบ causal ที่ seed ด้วย SMA ของ period แรก (ตรงกับ technicalindicators.EMA)
@@ -421,4 +431,4 @@ function evaluatePrecalc(candles, pc, idx, epic) {
   return _evaluate(candles, pc, idx, epic);
 }
 
-module.exports = { name: 'xauTrend', evaluate, precalc, evaluatePrecalc, calcInd, h4FromH1 };
+module.exports = { name: 'xauTrend', evaluate, evaluateDebug, precalc, evaluatePrecalc, calcInd, h4FromH1 };
