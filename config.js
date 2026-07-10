@@ -31,7 +31,7 @@ module.exports = {
       spreadMultiplier: 1.0,  // เทียบกับ Capital.com: spread จริง × factor (1.0 = raw Dukascopy)
       trailing: true,
       trailingActivate: 0.1,
-      trailingDistance: 0.25,
+      trailingDistance: 0.1,
       trailingDistanceMax: 0.6,
       adaptiveVol: true, // ปรับ SL/trailing ตาม regime ความผันผวน (ATR vs MA ระยะยาว) — dynamic ไร้ overfit
       trailingProgressive: 0,

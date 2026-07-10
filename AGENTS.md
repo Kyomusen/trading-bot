@@ -67,23 +67,26 @@ index.js (entry: mode = live | backtest)
 
 | Test | Result | หมายเหตุ |
 |------|--------|----------|
-| Real bid/ask spread (avg 0.46) | ✅ PF 2.02, DD 6.86%, WR 74.2% | 17 ปี (2009–2026), 7,013 trades |
-| Signal-quality filters | ✅ DD 9.65% → **6.86%** | `bbWidthMinPct:1.0`, `psarAlign:true` |
-| Session optimization [0,16] UTC | ✅ DD 9.65% → **6.86%** | เก็บ 73% สัญญาณ, 24–26/200 เดือนขาดทุน |
+| Real bid/ask spread (avg 0.46) | ✅ PF 2.69, DD 3.37%, WR 86.9% | 17 ปี (2009–2026), 13,644 trades |
+| Signal-quality filters | ✅ | `bbWidthMinPct:1.0`, `psarAlign:false` |
+| Session optimization [0,18] UTC | ✅ | 13/200 เดือนขาดทุน |
 | Vol-regime dynamic SL/trailing | ✅ เสถียรทุกยุค (generic bands, causal) | Early era PF 1.4/3.0/1.6, late era 2.7/3.0/2.7 |
 | Era stability (2009–2015 vs 2022–2026) | ✅ PF>1 ทุกกรณี | พิสูจน์ non-overfit |
+| **New entry models** (donchian, keltner, ema_cross, adx_di) | ❌ ไม่ดีขึ้น | ใหม่ทุกแบบลด risk-adjusted return — baseline momentum+trend ดีที่สุด |
+| **TD=0.1 tighter trailing** | ✅ **PF 2.69, DD 3.37%, negMo 13/200** | Key discovery: tight trailing gives highest risk-adjusted |
 
 ### Current Backtest Result (XAUUSD, 2009–2026, real bid/ask, 1% risk)
 | Metric | Value |
 |--------|-------|
-| Trades | 7,013 |
-| Win Rate | 74.2% |
-| Profit Factor | 2.02 |
-| Max DD (equity) | 6.86% |
-| Sharpe | 3.19 |
-| Avg Monthly Return | 2.13% |
-| Negative Months | 26 / 200 (13%) |
-| Worst Month | 2009-10: −5.58% |
+| Trades | 13,644 |
+| Win Rate | 86.9% |
+| Profit Factor | 2.69 |
+| Max DD (equity) | 3.37% |
+| Sharpe / Sortino | 5.58 / 9.18 |
+| Avg Monthly Return | 2.46% |
+| Negative Months | 13 / 200 (7%) |
+| Worst Month | −0.63% |
+| Years with PF<1 | 0 |
 
 ### ข้อจำกัดของ Backtest ที่ยังไม่ครอบคลุม
 - **Regime change**: Bootstrap MC สุ่มจากเทรดเดิม ไม่ได้จำลองตลาด sideway หรือ volatility crash
@@ -113,6 +116,6 @@ index.js (entry: mode = live | backtest)
 
 - Do not commit `.env` — contains real credentials
 - All indicators are in `utils/indicators.js` (no `technicalindicators` dependency used yet, but installed)
-- Backtest uses real bid/ask data (`XAUUSD_bidask.json`, avg spread 0.46 ≈ 46 pips). Config: atrSl=1.2, trailingDist=0.15, maxConcurrentTrades=1, filters={bbWidthMinPct:1.0,psarAlign:true}, tradingHours={windows:[[0,16]]}, adaptiveVol=true
+- Backtest uses real bid/ask data (`XAUUSD_bidask.json`, avg spread 0.46 ≈ 46 pips). Config: atrSl=2.0, trailingDist=0.1, trailingActivate=0.1, maxConcurrentTrades=2, filters={bbWidthMinPct:1.0,psarAlign:false}, tradingHours={windows:[[0,18]]}, adaptiveVol=true
 - Live code skips entry if spread >125% of config, and dynamically reduces maxLot proportionally
 - EURUSD is disabled in config by default (only XAUUSD + USDJPY active)

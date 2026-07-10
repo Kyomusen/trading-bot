@@ -39,6 +39,7 @@ function calcInd(candles) {
   const n = close.length;
 
   const rsiAll = RSI.calculate({ values: close, period: 14 });
+  const ema9All = EMA.calculate({ values: close, period: 9 });
   const ema20All = EMA.calculate({ values: close, period: 20 });
   const ema50All = EMA.calculate({ values: close, period: 50 });
   const macdAll = MACD.calculate({ values: close, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false });
@@ -53,6 +54,7 @@ function calcInd(candles) {
   const last = {
     currentPrice: close[n - 1],
     rsi: rsiAll[rsiAll.length - 1] ?? null,
+    ema9: ema9All[ema9All.length - 1] ?? null,
     ema20: ema20All[ema20All.length - 1] ?? null,
     ema50: ema50All[ema50All.length - 1] ?? null,
     emaTrend: (ema20All[ema20All.length - 1] ?? 0) > (ema50All[ema50All.length - 1] ?? 0) ? 'bullish' : 'bearish',
@@ -63,7 +65,9 @@ function calcInd(candles) {
       histogramTrend: (macdAll[macdAll.length - 1]?.histogram ?? 0) > 0 ? 'positive' : 'negative',
     },
     atr: atrAll[atrAll.length - 1] ?? null,
-    adx: adxAll[adxAll.length - 1] ?? null,
+    adx: adxAll[adxAll.length - 1]?.adx ?? null,
+    diPlus: adxAll[adxAll.length - 1]?.pdi ?? null,
+    diMinus: adxAll[adxAll.length - 1]?.mdi ?? null,
     bbWidthPct: (bbAll[bbAll.length - 1] && bbAll[bbAll.length - 1].middle) ? ((bbAll[bbAll.length - 1].upper - bbAll[bbAll.length - 1].lower) / bbAll[bbAll.length - 1].middle) * 100 : null,
     stoch: stochAll[stochAll.length - 1] ? { k: stochAll[stochAll.length - 1].k, d: stochAll[stochAll.length - 1].d } : null,
     psarDir: (psarAll[psarAll.length - 1] != null) ? (close[n - 1] > psarAll[psarAll.length - 1] ? 'up' : 'down') : null,
@@ -74,11 +78,16 @@ function calcInd(candles) {
   const recent = candles.slice(-24);
   const swingHigh = Math.max(...recent.map(c => c.high));
   const swingLow = Math.min(...recent.map(c => c.low));
+  const recent20 = candles.slice(-20);
+  const donchianHigh20 = Math.max(...recent20.map(c => c.high));
+  const donchianLow20 = Math.min(...recent20.map(c => c.low));
   const threshold = last.atr ? last.atr * 0.3 : 0;
   const nearSupport = threshold > 0 && Math.abs(last.currentPrice - swingLow) <= threshold;
   const nearResistance = threshold > 0 && Math.abs(last.currentPrice - swingHigh) <= threshold;
+  const keltnerUpper = last.ema20 != null && last.atr ? last.ema20 + 2 * last.atr : null;
+  const keltnerLower = last.ema20 != null && last.atr ? last.ema20 - 2 * last.atr : null;
 
-  return { ...last, swingHigh, swingLow, nearSupport, nearResistance };
+  return { ...last, swingHigh, swingLow, nearSupport, nearResistance, donchianHigh20, donchianLow20, keltnerUpper, keltnerLower };
 }
 
 function evaluate(candles, epic) {
@@ -110,7 +119,7 @@ function _evaluate(candles, pc, idx, epic) {
   const ind = pc ? pc[idx] : calcInd(candles);
   if (!ind || ind.rsi == null || !ind.atr) return null;
 
-  const { rsi, atr, currentPrice, ema20, ema50, emaTrend, macd, nearSupport, nearResistance } = ind;
+  const { rsi, atr, currentPrice, ema9, ema20, ema50, emaTrend, macd, nearSupport, nearResistance, adx, diPlus, diMinus, donchianHigh20, donchianLow20, keltnerUpper, keltnerLower } = ind;
 
   let h4Trend = 'neutral';
   if (pc && pc[idx]?.h4Trend) {
@@ -152,8 +161,7 @@ function _evaluate(candles, pc, idx, epic) {
   const candidates = [];
   for (const setup of allowedSetups) {
     const rr = rsiRanges[setup];
-    if (!rr) continue;
-    if (rsi < rr.min || rsi > rr.max) continue;
+    if (rr && (rsi < rr.min || rsi > rr.max)) continue;
 
     if (setup === 'trend_sell' && downtrend && nearResistance)
       candidates.push({ action: 'SELL', setup, confidence: 0.8, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
@@ -167,6 +175,27 @@ function _evaluate(candles, pc, idx, epic) {
       candidates.push({ action: 'SELL', setup, confidence: 0.8, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
     if (setup === 'pullback_buy' && uptrend && macdPositive && macdCrossoverBull)
       candidates.push({ action: 'BUY', setup, confidence: 0.8, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
+    // --- new entries ---
+    // Donchian breakout: price closes above/below 20-bar high/low
+    if (setup === 'donchian_sell' && downtrend && currentPrice != null && donchianLow20 != null && currentPrice < donchianLow20)
+      candidates.push({ action: 'SELL', setup, confidence: 0.75, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
+    if (setup === 'donchian_buy' && uptrend && currentPrice != null && donchianHigh20 != null && currentPrice > donchianHigh20)
+      candidates.push({ action: 'BUY', setup, confidence: 0.75, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
+    // Keltner channel: price touches/pierces channel extremes
+    if (setup === 'keltner_sell' && downtrend && currentPrice != null && keltnerLower != null && currentPrice <= keltnerLower)
+      candidates.push({ action: 'SELL', setup, confidence: 0.7, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
+    if (setup === 'keltner_buy' && uptrend && currentPrice != null && keltnerUpper != null && currentPrice >= keltnerUpper)
+      candidates.push({ action: 'BUY', setup, confidence: 0.7, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
+    // EMA9/21 cross
+    if (setup === 'ema_cross_sell' && downtrend && ema9 != null && ema20 != null && ema9 < ema20)
+      candidates.push({ action: 'SELL', setup, confidence: 0.75, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
+    if (setup === 'ema_cross_buy' && uptrend && ema9 != null && ema20 != null && ema9 > ema20)
+      candidates.push({ action: 'BUY', setup, confidence: 0.75, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
+    // ADX DI cross: DI+ crosses above DI- for buy, DI- crosses above DI+ for sell
+    if (setup === 'adx_di_sell' && downtrend && diPlus != null && diMinus != null && diMinus > diPlus)
+      candidates.push({ action: 'SELL', setup, confidence: 0.7, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
+    if (setup === 'adx_di_buy' && uptrend && diPlus != null && diMinus != null && diPlus > diMinus)
+      candidates.push({ action: 'BUY', setup, confidence: 0.7, slPips, trailingDistance: (sc.trailingDistance ?? 0.15) * reg.trailMult });
   }
 
   // ----- ตัวกรองคุณภาพสัญญาณ (กรองสัญญาณแย่ออก โดยไม่ลดความถี่ของสัญญาณดี) -----
@@ -268,6 +297,7 @@ function precalc(candles) {
   const close = candles.map(c => c.close);
 
   const rsiAll = RSI.calculate({ values: close, period: 14 });
+  const ema9All = EMA.calculate({ values: close, period: 9 });
   const ema20All = EMA.calculate({ values: close, period: 20 });
   const ema50All = EMA.calculate({ values: close, period: 50 });
   const macdAll = MACD.calculate({ values: close, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false });
@@ -280,8 +310,11 @@ function precalc(candles) {
   const atrMaLongAll = SMA.calculate({ values: atrAll, period: 720 });
 
   // คำนวณ offset จากความยาวจริงของ array ที่ library ให้มา
+
+  // คำนวณ offset จากความยาวจริงของ array ที่ library ให้มา
   // จะได้ไม่พังถ้าต่อมา technicalindicators เปลี่ยนจำนวน warmup bar
   const offRsi = close.length - rsiAll.length;
+  const offEma9 = close.length - ema9All.length;
   const offEma20 = close.length - ema20All.length;
   const offEma50 = close.length - ema50All.length;
   const offMacd = close.length - macdAll.length;
@@ -292,7 +325,7 @@ function precalc(candles) {
   const offPsar = close.length - psarAll.length;
   const offAtrMa = atrAll.length - atrMaAll.length;
   const offAtrMaLong = atrAll.length - atrMaLongAll.length;
-  const offset = Math.max(offRsi, offEma20, offEma50, offMacd, offAtr, offAdx, offBb, offStoch, offPsar);
+  const offset = Math.max(offRsi, offEma9, offEma20, offEma50, offMacd, offAtr, offAdx, offBb, offStoch, offPsar);
 
   // H4 trend แบบไม่มี look-ahead:
   // สร้าง H4 buckets ล่วงหน้า (close = ราคาปิดสุดท้ายของแต่ละ bucket)
@@ -318,7 +351,7 @@ function precalc(candles) {
     }
     const currentPrice = close[i];
     const atrVal = atrAll[i - offAtr] ?? null;
-    const adxVal = adxAll[i - offAdx] ?? null;
+    const adxVal = adxAll[i - offAdx];
     const bb = bbAll[i - offBb];
     const bbWidthPct = (bb && bb.middle) ? ((bb.upper - bb.lower) / bb.middle) * 100 : null;
     const stoch = stochAll[i - offStoch];
@@ -328,8 +361,18 @@ function precalc(candles) {
     const atrMaLong = atrMaLongAll[(i - offAtr) - offAtrMaLong] ?? null;
     const atrRatio = (atrVal != null && atrMaLong) ? atrVal / atrMaLong : null;
     const threshold = atrVal && atrVal > 0 ? atrVal * 0.3 : 0;
+    const start20 = Math.max(0, i - 19);
+    let dh20 = -Infinity, dl20 = Infinity;
+    for (let j = start20; j <= i; j++) {
+      if (candles[j].high > dh20) dh20 = candles[j].high;
+      if (candles[j].low < dl20) dl20 = candles[j].low;
+    }
     const nearSupport = threshold > 0 && Math.abs(currentPrice - sl) <= threshold;
     const nearResistance = threshold > 0 && Math.abs(currentPrice - sh) <= threshold;
+    const ema9v = ema9All[i - offEma9] ?? null;
+    const ema20v = ema20All[i - offEma20] ?? null;
+    const keltnerUpper = (ema20v != null && atrVal) ? ema20v + 2 * atrVal : null;
+    const keltnerLower = (ema20v != null && atrVal) ? ema20v - 2 * atrVal : null;
 
     // H4 trend แบบไม่มี look-ahead: EMA ของ H4 bucket ที่ complete แล้ว (0..j-1)
     // + bucket ปัจจุบัน (j) ที่เอาค่า close ล่าสุด candles[i].close แทน close อนาคต
@@ -347,6 +390,7 @@ function precalc(candles) {
     result[i] = {
       currentPrice,
       rsi: rsiAll[i - offRsi] ?? null,
+      ema9: ema9All[i - offEma9] ?? null,
       ema20: ema20All[i - offEma20] ?? null,
       ema50: ema50All[i - offEma50] ?? null,
       emaTrend: (ema20All[i - offEma20] ?? 0) > (ema50All[i - offEma50] ?? 0) ? 'bullish' : 'bearish',
@@ -357,13 +401,16 @@ function precalc(candles) {
         histogramTrend: (macdAll[i - offMacd]?.histogram ?? 0) > 0 ? 'positive' : 'negative',
       },
       atr: atrVal,
-      adx: adxVal,
+      adx: adxVal?.adx ?? null,
+      diPlus: adxVal?.pdi ?? null,
+      diMinus: adxVal?.mdi ?? null,
       bbWidthPct,
       stoch: stoch ? { k: stoch.k, d: stoch.d } : null,
       psarDir,
       atrMa,
       atrRatio,
       swingHigh: sh, swingLow: sl, nearSupport, nearResistance,
+      donchianHigh20: dh20, donchianLow20: dl20, keltnerUpper, keltnerLower,
       h4Trend,
     };
   }
