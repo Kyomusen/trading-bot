@@ -139,6 +139,73 @@ class CapitalClient {
     });
     return { dealReference: res.data.dealReference };
   }
+
+  // ---------- Verification & History ----------
+
+  async confirmDeal(dealReference) {
+    await this.ensureSession();
+    try {
+      const res = await axios.get(`${this.baseUrl}/api/v1/confirms/${dealReference}`, {
+        headers: this._authHeaders(),
+      });
+      return {
+        status: res.data.status,          // 'OPEN', 'CLOSED', etc.
+        dealStatus: res.data.dealStatus,  // 'ACCEPTED', 'REJECTED', etc.
+        level: res.data.level,
+        size: res.data.size,
+        direction: res.data.direction,
+        dealId: res.data.dealId,
+        reason: res.data.reason,
+      };
+    } catch (e) {
+      return { status: 'ERROR', dealStatus: null, reason: e.response?.data?.errorCode || e.message };
+    }
+  }
+
+  async getTransactionHistory(from, to) {
+    await this.ensureSession();
+    try {
+      const res = await axios.get(`${this.baseUrl}/api/v1/history/transactions`, {
+        headers: this._authHeaders(),
+        params: { from, to, type: 'TRADE' },
+      });
+      return (res.data.transactions ?? []).map((t) => ({
+        dateUtc: t.dateUtc,
+        instrumentName: t.instrumentName,
+        transactionType: t.transactionType,
+        note: t.note,
+        reference: t.reference,
+        pnl: t.size ? parseFloat(t.size) : null,
+        currency: t.currency,
+        status: t.status,
+        dealId: t.dealId,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  async getActivityHistory(from, to) {
+    await this.ensureSession();
+    try {
+      const res = await axios.get(`${this.baseUrl}/api/v1/history/activity`, {
+        headers: this._authHeaders(),
+        params: { from, to },
+      });
+      return (res.data.activities ?? []).map((a) => ({
+        date: a.date,
+        dateUTC: a.dateUTC,
+        epic: a.epic,
+        dealId: a.dealId,
+        source: a.source,
+        type: a.type,       // 'POSITION', 'WORKING_ORDER', etc.
+        status: a.status,   // 'ACCEPTED', 'EXECUTED', etc.
+        details: a.details,
+      }));
+    } catch {
+      return [];
+    }
+  }
 }
 
 module.exports = new CapitalClient();

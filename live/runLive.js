@@ -25,9 +25,22 @@ const lastPrice = new Map();
 const lastCandles = new Map();
 let _startTs = Date.now();
 
-global.__lossStreak = readState().lossStreak || 0;
+const _savedState = readState();
+global.__lossStreak = _savedState.lossStreak || 0;
+function persistState() {
+  const m = {};
+  for (const [k, v] of lastEvaluatedBar) m[k] = v;
+  writeState({ lossStreak: global.__lossStreak, evaluatedBars: m });
+}
 function persistLossStreak() {
   writeState({ ...readState(), lossStreak: global.__lossStreak });
+}
+
+// Restore evaluated bars from saved state (ป้องกัน restart duplicate)
+if (_savedState.evaluatedBars) {
+  for (const [epic, ts] of Object.entries(_savedState.evaluatedBars)) {
+    if (ts) lastEvaluatedBar.set(epic, ts);
+  }
 }
 
 function shiftForSpread(signal, liveSpread) {
@@ -98,6 +111,8 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
     return;
   }
 
+  const existingDirections = new Set(positions.map((p) => p.direction));
+
   const signals = evaluateAll(candles, epic);
   if (signals.length === 0) return;
 
@@ -119,6 +134,11 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
       resolveMaxLot(symbolConfig, balance, entryUsed)
     );
 
+    if (existingDirections.has(signal.direction)) {
+      logEvent(epic, { type: 'skip_direction_exists', direction: signal.direction });
+      continue;
+    }
+
     const order = await broker.placeOrder({
       epic: apiEpic, direction: signal.direction, size, stopLevel: stopUsed,
     });
@@ -127,30 +147,33 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
       continue;
     }
 
-    let actualSize = size;
-    try {
-      const live = (await broker.getPositions()) || [];
-      const lp = live.find((p) => p.dealId === order.dealReference);
-      if (lp && lp.size) actualSize = lp.size;
-    } catch {}
+    // Verify order was accepted by broker
+    const confirm = await broker.confirmDeal(order.dealReference);
+    if (confirm.dealStatus !== 'ACCEPTED' && confirm.status !== 'OPEN') {
+      logEvent(epic, { type: 'skip_order_rejected', dealRef: order.dealReference, reason: confirm.reason || confirm.dealStatus });
+      continue;
+    }
+
+    const actualEntry = confirm.level || entryUsed;
+    const actualSiz = confirm.size || size;
 
     const tracker = trackers.get(epic);
     if (tracker) tracker.openPosition({
       dealId: order.dealReference, epic, direction: signal.direction,
-      size: actualSize, entryPrice: entryUsed, stopLevel: stopUsed,
+      size: actualSiz, entryPrice: actualEntry, stopLevel: stopUsed,
     });
 
     const riskAmt = balance * ((symbolConfig.riskPercent ?? config.sizing.fixedRisk.riskPercent) / 100);
     const tradeEvent = createTradeEvent({
       strategy: signal.strategy, epic, direction: signal.direction,
-      entry: signal.entry, stopLoss: signal.stopLoss, takeProfit: null, size: actualSize,
-      riskAmount: Math.min(riskAmt, actualSize * slDist),
+      entry: actualEntry, stopLoss: signal.stopLoss, takeProfit: null, size: actualSiz,
+      riskAmount: Math.min(riskAmt, actualSiz * slDist),
       confidence: signal.confidence, indicators: signal.indicators,
       openedAt: Date.now(),
     });
     openTradeMap.set(order.dealReference, tradeEvent);
-    logEvent(epic, { type: 'open', dealId: order.dealReference, direction: signal.direction, entry: entryUsed, stop: stopUsed, size: actualSize });
-    logTrade(epic, { type: 'OPEN', epic, dealId: order.dealReference, direction: signal.direction, entry: signal.entry, stopLoss: signal.stopLoss, size: actualSize, openedAt: Date.now(), strategy: signal.strategy, indicators: signal.indicators });
+    logEvent(epic, { type: 'open', dealId: order.dealReference, direction: signal.direction, entry: entryUsed, stop: stopUsed, size: actualSiz, fillEntry: actualEntry });
+    logTrade(epic, { type: 'OPEN', epic, dealId: order.dealReference, direction: signal.direction, entry: signal.entry, stopLoss: signal.stopLoss, size: actualSiz, openedAt: Date.now(), strategy: signal.strategy, indicators: signal.indicators });
     try { await discordSender.send(discordFormatter.formatOpenEvent(tradeEvent)); } catch (e) { logEvent(epic, { type: 'discord_err', context: 'open', msg: e.message }); }
   }
 }
@@ -161,9 +184,25 @@ async function crossCheck(epic) {
   let remote;
   try { remote = await broker.getPositions(); } catch { return; }
   const { diffs, autoClosed } = tracker.crossCheck(remote);
-  // autoClosed = broker ปิด position (SL/TSL จริง) → clean up shadow + notify
+
+  // Fetch broker transaction history (วันนี้) for PnL verification
+  const today = new Date();
+  const yesterday = new Date(today.getTime() - 86400000);
+  const fmt = (d) => d.toISOString().slice(0, 19);
+  let txns = [];
+  try { txns = await broker.getTransactionHistory(fmt(yesterday), fmt(today)); } catch {}
+
   for (const ev of autoClosed) {
-    logEvent(epic, { type: 'auto_close', dealId: ev.dealId, direction: ev.direction, exitPrice: ev.exitPrice, pnl: ev.pnl });
+    // Find matching broker txn to get real PnL
+    const txn = txns.find((t) => t.dealId === ev.dealId || t.reference === ev.dealId);
+    const brokerPnl = txn ? txn.pnl : null;
+    logEvent(epic, {
+      type: 'auto_close', dealId: ev.dealId, direction: ev.direction,
+      exitPrice: ev.exitPrice, pnl: ev.pnl, brokerPnl,
+    });
+    if (brokerPnl != null && ev.pnl != null && Math.abs(brokerPnl - ev.pnl) > 0.01) {
+      logEvent(epic, { type: 'pnl_mismatch', dealId: ev.dealId, shadowPnl: ev.pnl, brokerPnl });
+    }
   }
   if (diffs.length) {
     logEvent(epic, { type: 'cross_check_mismatch', diffs });
@@ -254,6 +293,7 @@ async function pollSymbol(symbolConfig) {
     });
     await maybeOpen(symbolConfig, candles, atrNow);
     lastEvaluatedBar.set(epic, lastBarTs);
+    persistState();
   }
   await crossCheck(epic);
 }
