@@ -15,11 +15,14 @@ const discordSender = require('../notify/discord/sender');
 const { readState, writeState } = require('./state');
 const { logEvent, logCandle, logSignal, logTrade } = require('./liveLogger');
 
-const POLL_MS = 5 * 60 * 1000; // REST poll ทุก 5m — แค่พอ detect ว่าแท่ง H1 ปิดใหม่แล้ว
+const POLL_MS = 5 * 60 * 1000;
 const trackers = new Map();
 const openTradeMap = new Map();
 const streams = [];
 const lastEvaluatedBar = new Map();
+const lastPrice = new Map();
+const lastCandles = new Map();
+let _startTs = Date.now();
 
 global.__lossStreak = readState().lossStreak || 0;
 function persistLossStreak() {
@@ -217,6 +220,7 @@ async function pollSymbol(symbolConfig) {
     }
   }
 
+  lastCandles.set(epic, candles);
   const atrValues = atr(candles, 14);
   const atrNow = atrValues[atrValues.length - 1];
   const tracker = trackers.get(epic);
@@ -266,6 +270,71 @@ async function tickAllSymbols() {
   try { await reportPositions(); } catch {}
 }
 
+async function sendHeartbeat() {
+  if (!config.notify?.heartbeat?.enabled) return;
+  let balance = null;
+  try { balance = (await broker.getAccountBalance()).balance; } catch {}
+
+  const symbols = [];
+  for (const sym of config.symbols) {
+    if (!sym.enabled) continue;
+    const { epic } = sym;
+    const price = lastPrice.get(epic);
+    const ws = streams.find((s) => s.epic === epic);
+    const candles = lastCandles.get(epic);
+    let indicators = null;
+    if (candles && candles.length > 50) {
+      try {
+        const dbg = xauStrategy.evaluateDebug(candles, epic);
+        if (dbg && dbg.indicators) {
+          const ind = dbg.indicators;
+          indicators = {
+            rsi: ind.rsi,
+            ema20: ind.ema20,
+            ema50: ind.ema50,
+            atr: ind.atr,
+            adx: ind.adx,
+            macd: ind.macd,
+          };
+        }
+      } catch {}
+    }
+
+    const tracker = trackers.get(epic);
+    let positions = [];
+    if (tracker && tracker.positions.size > 0) {
+      for (const pos of tracker.positions.values()) {
+        if (pos.closed) continue;
+        const mtm = tracker.markToMarket(price || { bid: null, ask: null });
+        const mtmEntry = mtm.find((m) => m.dealId === pos.dealId);
+        positions.push({
+          dealId: pos.dealId,
+          direction: pos.direction,
+          size: pos.size,
+          entryPrice: pos.entryPrice,
+          stopLevel: pos.stopLevel,
+          unrealizedPnl: mtmEntry?.unrealizedPnl ?? null,
+        });
+      }
+    }
+
+    symbols.push({ epic, price, ws: ws?.ready ?? false, indicators, positions });
+  }
+
+  const uptimeMs = Date.now() - _startTs;
+  const h = Math.floor(uptimeMs / 3600000);
+  const m = Math.floor((uptimeMs % 3600000) / 60000);
+  const uptimeStr = `${h}h ${m}m`;
+
+  const payload = discordFormatter.formatHeartbeat({ uptime: uptimeStr, symbols, balance, lossStreak: global.__lossStreak });
+  try {
+    await discordSender.send(payload);
+    logEvent('system', { type: 'heartbeat', balance, positions: symbols.reduce((a, s) => a + s.positions.length, 0) });
+  } catch (e) {
+    logEvent('system', { type: 'heartbeat_err', msg: e.message });
+  }
+}
+
 function attachStream(symbolConfig) {
   const { epic, brokerEpic } = symbolConfig;
   const apiEpic = brokerEpic || epic;
@@ -279,7 +348,10 @@ function attachStream(symbolConfig) {
   // but feedPrice no longer calls rec.addTick — WS is SL/TSL only
 
   const stream = new CapitalStream({ epic, brokerEpic: apiEpic });
-  stream.on('price', (price) => feedPrice(epic, price));
+  stream.on('price', (price) => {
+    lastPrice.set(epic, price);
+    feedPrice(epic, price);
+  });
   stream.on('error', (e) => logEvent(epic, { type: 'ws_error', msg: e.message }));
   stream.on('close', () => {
     logEvent(epic, { type: 'ws_closed' });
@@ -295,6 +367,7 @@ process.on('SIGINT', () => { logEvent('system', { type: 'shutdown', signal: 'SIG
 process.on('SIGTERM', () => { logEvent('system', { type: 'shutdown', signal: 'SIGTERM' }); process.exit(0); });
 
 async function start() {
+  _startTs = Date.now();
   logEvent('system', { type: 'start', msg: 'เริ่มบอทเทรดสด — WS=SL/TSL only, REST=signals' });
   for (const sym of config.symbols) {
     if (!sym.enabled) continue;
@@ -302,6 +375,12 @@ async function start() {
   }
   await tickAllSymbols();
   setInterval(tickAllSymbols, POLL_MS);
+
+  const hbMs = (config.notify?.heartbeat?.intervalMinutes ?? 60) * 60 * 1000;
+  if (config.notify?.heartbeat?.enabled) {
+    setTimeout(() => sendHeartbeat(), 60000);
+    setInterval(sendHeartbeat, hbMs);
+  }
 }
 
 module.exports = { start, feedPrice, shiftForSpread };

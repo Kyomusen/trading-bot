@@ -186,6 +186,10 @@ module.exports = {
       webhookUrl: process.env.DISCORD_WEBHOOK_URL || '',
       enabled: true,
     },
+    heartbeat: {
+      enabled: process.env.HEARTBEAT_ENABLED !== 'false',
+      intervalMinutes: 60,
+    },
   },
 
   // ===== Backtest =====
