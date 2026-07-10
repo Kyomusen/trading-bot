@@ -68,12 +68,7 @@ async function handleClose(epic, ev) {
 function feedPrice(epic, price) {
   const tracker = trackers.get(epic);
   if (!tracker) return;
-  const { stopUpdates } = tracker.onPrice({ epic, bid: price.bid, ask: price.ask, timestamp: price.timestamp });
-  for (const u of stopUpdates) {
-    broker.updatePosition(u.dealId, { stopLevel: u.stopLevel })
-      .then(() => logEvent(epic, { type: 'trail_update', dealId: u.dealId, stopLevel: u.stopLevel }))
-      .catch((e) => logEvent(epic, { type: 'trail_err', dealId: u.dealId, msg: e.message }));
-  }
+  tracker.onPrice({ epic, bid: price.bid, ask: price.ask, timestamp: price.timestamp });
 }
 
 async function maybeOpen(symbolConfig, candles, atrNow) {
@@ -226,9 +221,25 @@ async function pollSymbol(symbolConfig) {
   const tracker = trackers.get(epic);
   if (tracker) tracker.setAtr(atrNow);
 
+  // REST price feed fallback (เมื่อ WS หลุด)
   if (tracker && (!streams.length || streams.every((s) => !s.ready))) {
     const md = await broker.getMarketDetails(apiEpic);
     if (md.bid != null && md.offer != null) feedPrice(epic, { bid: md.bid, ask: md.offer, timestamp: Date.now() });
+  }
+
+  // Sync shadow trailing stops → broker REST (ทุก 5m)
+  if (tracker && tracker.positions.size > 0) {
+    const md = await broker.getMarketDetails(apiEpic).catch(() => null);
+    if (md && md.bid != null) feedPrice(epic, { bid: md.bid, ask: md.offer, timestamp: Date.now() });
+    for (const [dealId, pos] of tracker.positions) {
+      if (pos.closed) continue;
+      try {
+        await broker.updatePosition(dealId, { stopLevel: pos.stopLevel });
+        logEvent(epic, { type: 'trail_sync', dealId, stopLevel: pos.stopLevel });
+      } catch (e) {
+        logEvent(epic, { type: 'trail_sync_err', dealId, msg: e.message });
+      }
+    }
   }
 
   const lastBarTs = candles[candles.length - 1].timestamp;
