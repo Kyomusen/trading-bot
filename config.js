@@ -31,11 +31,11 @@ module.exports = {
       spreadMultiplier: 1.0,  // เทียบกับ Capital.com: spread จริง × factor (1.0 = raw Dukascopy)
       trailing: true,
       trailingActivate: 0.1,
-      trailingDistance: 0.15,
-      trailingDistanceMax: 0.5,
+      trailingDistance: 0.25,
+      trailingDistanceMax: 0.6,
       adaptiveVol: true, // ปรับ SL/trailing ตาม regime ความผันผวน (ATR vs MA ระยะยาว) — dynamic ไร้ overfit
       trailingProgressive: 0,
-      atrSl: 1.2,
+      atrSl: 2.0,
       spreadPips: 25,
       slippagePips: 2,
       maxLot: 5,
@@ -43,9 +43,9 @@ module.exports = {
       activeSetups: ['trend_buy', 'trend_sell', 'momentum_buy', 'momentum_sell'],
       filters: {
         bbWidthMinPct: 1.0, // กรองสัญญาณแย่: ไม่เทรดตอน Bollinger แคบ (sideway/chop) — ลด whipsaw
-        psarAlign: true,    // ต้องอยู่ทิศทางเดียวกับ PSAR (ยืนยันเทรนด์)
+        psarAlign: false,   // ไม่บังคับ PSAR align (ปล่อยสัญญาณมากขึ้น)
       },
-      tradingHours: { windows: [[0, 16]] }, // เทรดเฉพาะหน้าต่างสภาพคล่องสูง UTC 00-16 (Asian+London+London/NY overlap) — ลด DD จากช่วงบาง/ny afternoon
+      tradingHours: { windows: [[0, 18]] }, // เทรดเฉพาะสภาพคล่องสูง UTC 00-18 (Asian+London+London/NY overlap + 2h early NY) — ลด DD จาก NY thin hours
       rsi: {
         trend_buy: { min: 25, max: 50 },
         trend_sell: { min: 50, max: 75 },
@@ -165,7 +165,7 @@ module.exports = {
 
     // ===== Risk guardrails =====
   risk: {
-    maxConcurrentTrades: 1,
+    maxConcurrentTrades: 2,
   },
 
   // ===== Broker (margin / leverage) =====

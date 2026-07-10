@@ -54,6 +54,9 @@ function runBacktestForCandles(symbolConfig, candles) {
   let lastMaxLot = 0.01;
   const precalc = xauStrategy.precalc ? xauStrategy.precalc(candles) : null;
 
+  // Consecutive loss streak reducer (ลด size หลังแพ้ติด, กลับมาเมื่อชนะ)
+  let lossStreak = 0;
+
   for (let i = offset; i < candles.length; i++) {
     broker.tick(candles[i]);
 
@@ -67,7 +70,13 @@ function runBacktestForCandles(symbolConfig, candles) {
       lastWKey = wKey;
     }
 
-    for (const settled of broker.settledPositions.splice(0)) {
+    // loss streak: ดู net PnL ของทุก settled ในแท่งนี้
+    const settledThisCandle = broker.settledPositions.splice(0);
+    const netSettlePnL = settledThisCandle.reduce((s, x) => s + (x.pnl || 0), 0);
+    if (netSettlePnL < 0) lossStreak++;
+    else if (netSettlePnL > 0) lossStreak = 0;
+
+    for (const settled of settledThisCandle) {
           const openEvent = openTradeMap.get(settled.dealId);
           if (!openEvent) continue;
           trades.push(closeTradeEvent(openEvent, {
@@ -108,6 +117,11 @@ function runBacktestForCandles(symbolConfig, candles) {
         pos.bestPrice = trailPos.bestPrice;
       }
     }
+
+    // Loss streak dynamic risk: แพ้ติด → ลด size; ชนะ → กลับมาเต็ม
+    let streakRiskMult = 1;
+    if (lossStreak >= 3) streakRiskMult = 0.5;
+    else if (lossStreak === 2) streakRiskMult = 0.75;
 
     // Signals using precalc
     let signals;
@@ -154,9 +168,12 @@ function runBacktestForCandles(symbolConfig, candles) {
       const slDist = Math.abs(entryUsed - stopUsed);
       if (slDist <= 0) continue;
 
+      // streakRiskMult: ลด size หลังแพ้ติด (loss streak circuit breaker)
+      const dynRisk = (symbolConfig.riskPercent ?? config.sizing?.fixedRisk?.riskPercent ?? 1) * streakRiskMult;
       const size = calcPositionSize({
         balance: broker.balance,
         slDistance: slDist,
+        riskPercent: dynRisk,
         confidence: signal.confidence,
         marketDetails: { minDealSize: 0.0001, maxDealSize: 10000 },
         symbolConfig,

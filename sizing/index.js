@@ -11,13 +11,13 @@ const methods = { legacyMaxLot, fixedRisk, confidenceBased };
 
 // marketDetails: { minDealSize, maxDealSize } จาก broker (จริงหรือจำลอง)
 // symbolConfig: config ของ symbol (ใช้หา riskPercent per-symbol ถ้ามี)
-function calcPositionSize({ balance, slDistance, confidence, marketDetails, symbolConfig }) {
+function calcPositionSize({ balance, slDistance, confidence, marketDetails, symbolConfig, riskPercent }) {
   const method = methods[config.sizingMethod];
   if (!method) {
     throw new Error(`ไม่รู้จัก sizingMethod: ${config.sizingMethod}`);
   }
 
-  let size = method.calcSize({ balance, slDistance, confidence, config, symbolConfig });
+  let size = method.calcSize({ balance, slDistance, confidence, config, symbolConfig, riskPercent });
 
   // clamp ด้วย min/max ของ broker เสมอ ไม่ว่าจะใช้ sizing วิธีไหน
   const safetyMargin = config.engine.maxDealSizeSafetyMargin;

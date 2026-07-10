@@ -12,6 +12,7 @@ const { atr } = require('../utils/indicators');
 const discordFormatter = require('../notify/discord/formatter');
 const discordSender = require('../notify/discord/sender');
 
+
 const POLL_MS = 60 * 1000;
 const trackers = new Map();   // epic -> PositionTracker
 const recorders = new Map(); // epic -> CandleRecorder
@@ -44,6 +45,12 @@ async function handleClose(epic, ev) {
   if (!te) return;
   let balance = null;
   try { balance = (await broker.getAccountBalance()).balance; } catch {}
+  // Track loss streak for dynamic risk reduction
+  if (ev.pnl != null) {
+    if (ev.pnl > 0) global.__lossStreak = 0;
+    else if (ev.pnl < 0) global.__lossStreak = (global.__lossStreak || 0) + 1;
+  }
+
   const closeEv = closeTradeEvent(te, {
     closedAt: ev.timestamp || Date.now(),
     exitPrice: ev.exitPrice,
@@ -91,6 +98,12 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
   }
 
   const { balance } = await broker.getAccountBalance();
+
+  // Loss streak dynamic risk (tracked in handleClose)
+  let streakRiskMult = 1;
+  if (global.__lossStreak >= 3) streakRiskMult = 0.5;
+  else if (global.__lossStreak === 2) streakRiskMult = 0.75;
+
   const positions = (await broker.getPositions()) || [];
   if (positions.length >= (config.risk?.maxConcurrentTrades || 1)) {
     console.log(`[live] ${epic} มี ${positions.length} position แล้ว ข้าม`);
@@ -105,11 +118,13 @@ async function maybeOpen(symbolConfig, candles, atrNow) {
     const { entryUsed, stopUsed, slDist } = shiftForSpread(signal, liveSpread);
     if (!slDist || slDist <= 0) continue;
 
-    // sizing ตรงกับ backtest: fixedRisk + clamp ด้วย resolveMaxLot (dynamic leverage)
+    // sizing ตรงกับ backtest: fixedRisk + monthly progressive risk reduction
+    const dynRisk = (symbolConfig.riskPercent ?? config.sizing?.fixedRisk?.riskPercent ?? 1) * monthRiskMult;
     const size = Math.min(
       calcPositionSize({
         balance,
         slDistance: slDist,
+        riskPercent: dynRisk,
         confidence: signal.confidence,
         marketDetails: { minDealSize: 0.0001, maxDealSize: 10000 },
         symbolConfig,
